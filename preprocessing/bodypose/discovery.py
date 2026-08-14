@@ -51,15 +51,32 @@ def matches_any(name: str, rel_path: str, patterns: Sequence[str]) -> bool:
 def walk_images(
     root: str,
     exclude: Sequence[str] = (),
-    follow_symlinks: bool = False,
+    follow_symlinks: bool = True,
 ) -> Iterator[str]:
     """Yield absolute paths to images beneath ``root``, in a stable order.
 
     ``exclude`` skips whole directories before descending into them, so an
     excluded folder costs nothing — nothing under it is read or even stat'd.
+
+    Symlinks are followed by default because that is the normal way images get
+    into INPUT/: the corpus is usually one or more links out to another volume,
+    and not following them would find nothing at all. Following links means
+    cycles are possible, so directories are tracked by real path and visited
+    once — a link back to an ancestor ends that branch instead of the walk.
     """
     root = os.path.abspath(root)
+    seen: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=follow_symlinks):
+        if follow_symlinks:
+            try:
+                real = os.path.realpath(dirpath)
+            except OSError:
+                real = dirpath
+            if real in seen:
+                dirnames[:] = []
+                continue
+            seen.add(real)
+
         keep = []
         for d in sorted(dirnames):
             if d in SKIP_DIRS or d.startswith("._"):
@@ -74,22 +91,40 @@ def walk_images(
                 yield os.path.join(dirpath, name)
 
 
-def excluded_dirs(root: str, exclude: Sequence[str]) -> list[str]:
-    """Immediate subfolders of ``root`` that an exclusion list will skip.
+def excluded_dirs(root: str, exclude: Sequence[str], depth: int = 2) -> list[str]:
+    """Folders near the top of ``root`` that an exclusion list will skip.
 
     Reported before the scan so a typo shows up as "matched nothing" rather
-    than silently indexing the folder you meant to leave out. Deliberately only
-    the top level: walking the whole tree to enumerate exclusions would cost
-    exactly the scan the flag exists to avoid.
+    than silently indexing the folder you meant to leave out.
+
+    Deliberately shallow: walking the whole tree to enumerate exclusions would
+    cost exactly the scan the flag exists to avoid. Two levels is enough for
+    INPUT/, where the first level is usually a symlink to a volume and the
+    folders worth excluding sit just inside it.
     """
     if not exclude:
         return []
     root = os.path.abspath(root)
-    hits = []
-    with os.scandir(root) as entries:
-        for entry in sorted(entries, key=lambda e: e.name):
-            if entry.is_dir() and matches_any(entry.name, entry.name, exclude):
-                hits.append(entry.name)
+    hits: list[str] = []
+
+    def scan(directory: str, prefix: str, remaining: int) -> None:
+        if remaining <= 0:
+            return
+        try:
+            with os.scandir(directory) as entries:
+                children = sorted(entries, key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in children:
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            rel = os.path.join(prefix, entry.name) if prefix else entry.name
+            if matches_any(entry.name, rel, exclude):
+                hits.append(rel)
+                continue  # no need to look inside something already excluded
+            scan(entry.path, rel, remaining - 1)
+
+    scan(root, "", depth)
     return hits
 
 

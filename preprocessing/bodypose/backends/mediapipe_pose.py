@@ -25,7 +25,7 @@ gets a working slow run and a line saying so, rather than a crash in a worker
 thread an hour in.
 
 Whether GPU actually beats CPU here is hardware-dependent and worth measuring
-rather than assuming: `bodypose bench <dataset>` times both on the machine in
+rather than assuming: `bodypose bench` times both on the machine in
 front of you. The model is small, so on a many-core CPU with a modest GPU,
 XNNPACK across several threads can win.
 """

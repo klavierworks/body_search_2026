@@ -55,7 +55,7 @@ def run_doctor(cfg: DoctorConfig) -> dict:
             "  There is nothing to compare here: with --backend mediapipe (the\n"
             "  default) the index and the browser already run the same detector,\n"
             "  which is the agreement this command exists to verify.\n"
-            "  To check throughput instead, run: bodypose bench <dataset>"
+            "  To check throughput instead, run: bodypose bench"
         )
 
     note(f"sampling up to {cfg.sample} images from {cfg.root} ...")

@@ -1,25 +1,24 @@
 """Where things live.
 
-The repository is the frame of reference:
+The repository is the frame of reference, and there are exactly two directories:
 
-    INPUT/<dataset>/     source images, one folder per dataset
-    OUTPUT/<dataset>/    the index built from it
-    preprocessing/
-    live/
+    INPUT/     the images — everything under here, however it is arranged
+    OUTPUT/    the index built from them
 
-So a dataset is named, not pathed. `bodypose run output-images` reads
-`INPUT/output-images` and writes `OUTPUT/output-images`, and the live app finds
-both without being told where anything is.
+INPUT/ *is* the dataset. Not a folder of datasets: whatever is beneath it, at
+any depth, is one corpus, and one index is built from all of it. Subfolders are
+just organisation. Nothing needs naming and no command takes a dataset
+argument.
 
-Datasets are usually symlinks — the images themselves can sit on an external
-volume, or be copied to the internal disk, without any of that leaking into the
-index or the commands:
+The images themselves do not have to be there physically. Symlinks are the
+normal case, and the walk follows them:
 
-    ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+    ln -s /media/you/SS2_OSX/DATASETS_BACKUP INPUT/datasets-backup
+    ln -s /media/you/SS2_OSX/output-images   INPUT/output-images
 
-Because a dataset is identified by name rather than by absolute path, an index
-built on one machine still resolves on another. Absolute paths still work
-everywhere a dataset name does, for anything that does not fit the layout.
+Both of those are then part of the same corpus. Image paths are recorded
+relative to INPUT/, so an index survives the repository moving, or a symlink
+being repointed at a local copy of the same images.
 """
 
 from __future__ import annotations
@@ -65,85 +64,60 @@ def output_root() -> str:
     return os.environ.get("BODY_OUTPUT") or os.path.join(repo_root(), OUTPUT_DIRNAME)
 
 
-def resolve_dataset(name: str) -> tuple[str, str | None]:
-    """Turn a dataset name or path into ``(absolute_path, dataset_name)``.
-
-    ``dataset_name`` is the path relative to INPUT/ when the images are inside
-    it, and None otherwise — that is the flag for whether the index is portable
-    or pinned to this machine's filesystem.
-    """
-    if os.path.isabs(name):
-        absolute = os.path.abspath(name)
-    else:
-        candidate = os.path.join(input_root(), name)
-        # A relative path that exists in the working directory but not under
-        # INPUT/ is honoured as-is, so `bodypose detect ./scratch` still works.
-        absolute = os.path.abspath(candidate if os.path.exists(candidate) else name)
-
-    return absolute, dataset_name_for(absolute)
-
-
-def dataset_name_for(absolute: str) -> str | None:
-    """The name a path would have as a dataset, or None if it is outside INPUT."""
+def require_input_root() -> str:
+    """INPUT/, with something in it, or an actionable exit."""
     root = input_root()
-    try:
-        # realpath both sides: INPUT/<dataset> is typically a symlink to another
-        # volume, and a textual comparison would call every dataset external.
-        real_root = os.path.realpath(root)
-        real_path = os.path.realpath(absolute)
-    except OSError:
-        return None
+    if not os.path.isdir(root):
+        raise SystemExit(
+            f"no INPUT directory at {root}\n"
+            "  create it and put the images in, or link them:\n"
+            f"    mkdir -p {root}\n"
+            f"    ln -s /path/to/images {os.path.join(root, 'images')}"
+        )
+    if not _has_entries(root):
+        raise SystemExit(
+            f"INPUT/ is empty ({root})\n"
+            "  link some images in, for example:\n"
+            f"    ln -s /path/to/images {os.path.join(root, 'images')}"
+        )
+    return root
 
-    for base, target in ((root, absolute), (real_root, real_path)):
-        try:
-            relative = os.path.relpath(target, base)
-        except ValueError:  # different drives on some platforms
-            continue
-        if not relative.startswith(os.pardir) and relative != os.curdir:
-            return relative
-    return None
+
+def _has_entries(root: str) -> bool:
+    """Anything at all besides the README that documents the layout."""
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if entry.name.startswith(".") or entry.name == "README.md":
+                continue
+            return True
+    return False
 
 
 def resolve_images_root(index: dict) -> str:
     """Where an index's images are now.
 
-    Prefers the dataset name over the absolute path recorded at build time, so
-    moving the repository, or rebuilding the symlink to point at a local copy
-    instead of the external drive, does not invalidate an index.
+    Always INPUT/ — paths in the index are relative to it, which is what makes
+    an index portable between machines and survive a repointed symlink. The
+    absolute path recorded at build time is only a fallback for an index whose
+    INPUT/ has since gone away.
     """
-    dataset = index.get("dataset")
-    if dataset:
-        candidate = os.path.join(input_root(), dataset)
-        if os.path.isdir(candidate):
-            return candidate
+    root = input_root()
+    if os.path.isdir(root):
+        return root
     return index.get("images_root") or ""
 
 
-def default_out_dir(dataset: str | None, absolute: str) -> str:
-    """Where an index for this dataset belongs."""
-    name = dataset or os.path.basename(os.path.normpath(absolute))
-    return os.path.join(output_root(), name)
-
-
-def list_datasets() -> list[str]:
-    """Immediate subfolders of INPUT/, symlinks included."""
+def list_input_entries() -> list[str]:
+    """Top-level names under INPUT/, for reporting what is in the corpus."""
     root = input_root()
     if not os.path.isdir(root):
         return []
     with os.scandir(root) as entries:
         return sorted(
-            e.name for e in entries if e.is_dir() and not e.name.startswith(".")
+            e.name for e in entries
+            if not e.name.startswith(".") and e.name != "README.md"
         )
 
 
-def list_indexes() -> list[str]:
-    """Datasets under OUTPUT/ that have a built index."""
-    root = output_root()
-    if not os.path.isdir(root):
-        return []
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        if "index.json" in filenames:
-            found.append(os.path.relpath(dirpath, root))
-            dirnames[:] = []  # an index directory has no nested indexes
-    return sorted(found)
+def has_index(out_dir: str | None = None) -> bool:
+    return os.path.isfile(os.path.join(out_dir or output_root(), "index.json"))

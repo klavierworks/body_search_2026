@@ -7,7 +7,7 @@ the GPU path does not run at all. A 600k-image corpus is several hours either
 way, which is long enough that it is worth spending two minutes finding out.
 
 The numbers this prints are end-to-end — decode plus inference, which is what
-the actual run costs — over a random sample of the real dataset, so image sizes
+the actual run costs — over a random sample of INPUT/, so image sizes
 are representative rather than a synthetic best case.
 """
 

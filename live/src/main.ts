@@ -60,8 +60,8 @@ async function main() {
       'Could not load the pose index.\n\n' +
         `${err instanceof Error ? err.message : String(err)}\n\n` +
         'Build one first:\n' +
-        '  ln -s /path/to/images INPUT/my-dataset\n' +
-        '  preprocessing/.venv/bin/bodypose run my-dataset --thumbs\n\n' +
+        '  ln -s /path/to/images INPUT/images\n' +
+        '  preprocessing/.venv/bin/bodypose run --thumbs\n\n' +
         'The dev server picks it up from OUTPUT/ with no further configuration.',
     )
   }

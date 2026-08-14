@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from .detect import DETECT_META_FILE, iter_detections
-from .paths import dataset_name_for
+from .paths import input_root
 from .encoding import (
     DIMS,
     ENCODING_VERSION,
@@ -79,7 +79,7 @@ def _load_detect_meta(out_dir: str) -> dict:
 def run_build(cfg: BuildConfig) -> dict:
     cfg.params.validate()
     detect_meta = _load_detect_meta(cfg.out_dir)
-    images_root = cfg.images_root or detect_meta.get("images_root")
+    images_root = cfg.images_root or input_root() or detect_meta.get("images_root")
     if not images_root:
         raise SystemExit("cannot determine images root — pass --images-root")
 
@@ -226,10 +226,9 @@ def run_build(cfg: BuildConfig) -> dict:
             "max_side": detect_meta.get("max_side"),
         },
         "filters": asdict(f),
-        # The dataset name is what makes an index portable: it resolves through
-        # INPUT/ wherever the repository is checked out, whereas images_root is
-        # only true on the machine that built it.
-        "dataset": dataset_name_for(images_root),
+        # Paths in meta.json are relative to INPUT/, which is what makes an
+        # index portable: it resolves wherever the repository is checked out,
+        # whereas images_root is only true on the machine that built it.
         "images_root": images_root,
         "thumbs_root": cfg.thumbs_root,
         "images_scanned": detect_meta.get("scanned"),

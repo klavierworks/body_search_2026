@@ -33,7 +33,7 @@ Two optional extras:
 Datasets live in `INPUT/` and are named, not pathed:
 
 ```bash
-ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+ln -s /path/to/output-images INPUT/output-images
 bodypose run output-images --thumbs          # detect + build + thumbnails
 ```
 
@@ -75,48 +75,77 @@ Detection streams results to an append-only JSONL as they land, so an
 interrupted run — closed lid, Ctrl-C, a disconnected volume — resumes from where
 it stopped. Just re-run the same command.
 
-## The Neural Engine
+## Compute
 
-The default backend is Apple Vision's `VNDetectHumanBodyPoseRequest`, explicitly
-pinned to the ANE. Python is only the driver: pyobjc drops the GIL around the
-Vision call, so the worker threads are genuinely concurrent and no arithmetic
-happens in Python.
+Detection runs MediaPipe BlazePose — the same model the browser runs. TFLite
+executes it through a *delegate*, which is the plug-in that decides what
+hardware does the arithmetic:
 
-`detect` prints which device it actually got:
+| `--delegate` | |
+|---|---|
+| `auto` (default) | try GPU, fall back to CPU if it does not work here |
+| `gpu` | OpenGL ES compute shaders on Linux, Metal on macOS |
+| `cpu` | XNNPACK, the optimised CPU path |
+
+`detect` prints what it got:
 
 ```
-compute device: NeuralEngine[Main]
+compute device: GPU (TFLite delegate)
 ```
 
-If it says `auto (...)` instead, pinning failed and you are running on whatever
-Vision chose. Measured on an M4 Pro over 60 images at 1024px:
+### Which is faster is not predictable
 
-| | ms/img | img/s |
-|---|---|---|
-| pinned to Neural Engine | **7.46** | 134 |
-| pinned to GPU | 7.46 | 134 |
-| left unpinned | 8.67 | 115 |
-| pinned to CPU | 53.58 | 19 |
-
-GPU ties with the ANE on this model, but the ANE is the better pick anyway: it
-leaves the GPU free and draws far less power over an hour-long run. Note that
-pinning also beats letting Vision schedule for itself.
-
-Threading plateaus at 4 workers (~135 img/s end-to-end including decode) and
-stays flat to 10 — the ANE is one shared block, not a per-core unit. The default
-of 8 sits in the flat region with enough headroom that the machine stays usable.
-
-Decode is close to half the total cost, which is why images go through ImageIO's
-thumbnail path (`--max-side`, default 1024) rather than being fully decoded — a
-100-megapixel museum scan never materialises as a bitmap.
-
-## Checking the two detectors agree
-
-The index is built with Vision and queried with MediaPipe. Both reduce to the
-same 17 COCO keypoints, but that is an assumption, and this tests it:
+The pose model is small. A many-core CPU running XNNPACK across eight threads is
+a genuine competitor to a mid-range GPU, and about half the total cost is JPEG
+decoding, which is CPU work either way. So measure instead of guessing:
 
 ```bash
-pip install -e '.[mediapipe]'
+bodypose bench output-images -n 200
+```
+
+That times both delegates at several thread counts over a random sample of the
+real dataset and prints an estimated wall-clock for a 600k-image corpus. Pass
+the winner to the real run as `--delegate` and `-j`.
+
+### The GPU probe
+
+MediaPipe is C++ underneath, and when it dislikes something it calls `CHECK`,
+which aborts the process. An abort is not a Python exception — nothing catches
+it. A half-working GL driver could otherwise kill an eight-hour run partway
+through with no chance to fall back.
+
+So `auto` decides by running one frame through the GPU delegate in a
+*subprocess*. If that aborts, the child dies, the parent reads the exit code and
+uses the CPU, and the run continues. It costs one interpreter start.
+
+The GPU path also needs 4-channel RGBA frames where the CPU path takes 3-channel
+RGB; handing the GPU an RGB frame is one of the aborts described above, so the
+backend picks the layout to match the delegate.
+
+### Decoding
+
+Decode is close to half the total cost. Pillow's `draft()` handles it: JPEG
+stores an image as blocks of frequency coefficients, and the decoder can
+reconstruct them at 1/2, 1/4 or 1/8 scale for proportionally less work. Asking
+for 1024px (`--max-side`) from an 8000px scan therefore decodes about a
+sixty-fourth of the data, and a 100-megapixel museum scan never materialises as
+a full bitmap. It applies to JPEG only; other formats decode fully and are
+resized afterwards.
+
+## Backends
+
+| `--backend` | |
+|---|---|
+| `mediapipe` (default) | The detector the browser also runs. Works everywhere. |
+| `vision` | Apple Vision on the Neural Engine. macOS only, `[vision]` extra. |
+
+Vision is faster on Apple silicon — 134 img/s against the CPU path's 19, measured
+on an M4 Pro over 60 images at 1024px, with threading plateauing at 4 workers.
+But it puts a *second* detector in the loop: the index would be built by Vision
+and queried by MediaPipe in the browser. Both reduce to the same 17 COCO
+keypoints, which is an assumption rather than a guarantee, and `doctor` tests it:
+
+```bash
 bodypose doctor output-images -n 60
 ```
 
@@ -125,8 +154,24 @@ important one — whether *mirroring* MediaPipe improves agreement. A left/right
 convention mismatch is invisible to any single-detector test and would quietly
 ruin every match, so it gets checked explicitly.
 
-If agreement is poor, `bodypose detect --backend mediapipe` builds the index
-with the browser's own detector. Slower, but exact.
+On the default MediaPipe backend there is nothing for `doctor` to check, because
+both ends already run the same model. That is the reason it is the default.
+
+## Model sizes
+
+`--model-size lite|full|heavy` picks the BlazePose variant. All three emit the
+same 33 landmarks and therefore the same 17-joint vector, so this is accuracy
+against speed and not a change of vector space:
+
+| | size | |
+|---|---|---|
+| `lite` | ~5 MB | default, and what the live app loads |
+| `full` | ~9 MB | noticeably better on partial and small figures |
+| `heavy` | ~29 MB | best, several times slower |
+
+Indexing with one size and querying with another works, but the small systematic
+differences between them widen the gap between an offline vector and a live one
+for no benefit. Match them, or change `live/src/main.ts` to load the same size.
 
 ## Filters
 

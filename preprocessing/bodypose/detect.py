@@ -20,7 +20,6 @@ from dataclasses import dataclass
 
 from .backends import make_backend
 from .discovery import excluded_dirs, walk_images
-from .paths import dataset_name_for
 from .util import Progress, note
 
 DETECTIONS_FILE = "detections.jsonl"
@@ -262,7 +261,6 @@ def run_detect(cfg: DetectConfig) -> dict:
 
 def _write_detect_meta(cfg: DetectConfig, root: str, scanned: int, backend: str, device: str) -> dict:
     meta = {
-        "dataset": dataset_name_for(root),
         "images_root": root,
         "scanned": scanned,
         "backend": backend,

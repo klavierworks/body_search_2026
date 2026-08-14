@@ -9,7 +9,7 @@ Two halves:
 |---|---|
 | [`INPUT/`](INPUT/) | Datasets, one folder per dataset. Usually symlinks to images living elsewhere. |
 | [`OUTPUT/`](OUTPUT/) | The index built from each dataset. Derived data, gitignored. |
-| [`preprocessing/`](preprocessing/) | Python CLI. Runs a pose detector on the Apple Neural Engine over a dataset and builds the index. |
+| [`preprocessing/`](preprocessing/) | Python CLI. Runs MediaPipe pose detection over a dataset and builds the index. Linux, macOS or Windows; GPU where there is one. |
 | [`live/`](live/) | TypeScript + Vite. Webcam → MediaPipe → nearest neighbour → the matching image. |
 
 A dataset is referred to by name, not by path. `bodypose run output-images`
@@ -47,24 +47,28 @@ joint counts in proportion to how sure *both* detectors were about it. That is
 what stops an occluded ankle the detector was guessing at from dragging the
 match somewhere silly.
 
-### Two detectors, one vector space
+### One detector, both ends
 
-The index is built with **Apple Vision** (Neural Engine, ~7× faster than the CPU
-path) and queried with **MediaPipe BlazePose** in the browser. Different models —
-but Vision's 19 joints and BlazePose's 33 landmarks both *contain* the 17 COCO
-keypoints, so both reduce to the same vector.
+Both halves run **MediaPipe BlazePose**: the Python CLI over the corpus, and
+`@mediapipe/tasks-vision` in the browser over the webcam. Same model, same 33
+landmarks, same left/right convention, so the offline vector and the live vector
+come out of one detector and there is no cross-model agreement to worry about.
 
-That is an assumption worth testing rather than trusting, so it is testable:
+That is what the `universal` branch changed, and it buys two things. Matching
+gets a guarantee rather than an assumption. And the pipeline stops being
+macOS-only — MediaPipe runs on Linux, macOS and Windows, on GPU or CPU.
+
+Apple Vision is still available on macOS as `--backend vision`, where the Neural
+Engine is faster than anything MediaPipe reaches from Python. It reintroduces
+the two-detector question, which is what `bodypose doctor` measures:
 
 ```bash
 bodypose doctor output-images -n 60
 ```
 
-runs both detectors over the same sample and reports how closely their vectors
-agree, including whether mirroring one of them *improves* agreement — which is
-how a left/right convention mismatch would show up, invisibly to any
-single-detector test. If the answer is bad, `--backend mediapipe` builds the
-index with the same detector the browser uses, trading speed for exactness.
+It runs both over the same sample and reports how closely their vectors agree,
+including whether mirroring one *improves* agreement — which is how a left/right
+convention mismatch would show up, invisibly to any single-detector test.
 
 ## Quick start
 
@@ -74,14 +78,20 @@ cd preprocessing && python3 -m venv .venv && .venv/bin/pip install -e . && cd ..
 cd live && npm install && npm run setup && cd ..
 
 # point a dataset at some images
-ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+ln -s /path/to/output-images INPUT/output-images
 
-# index it  (the 43k output-images set takes ~5 min)
+# see which delegate is faster on this machine (optional, ~2 min)
+preprocessing/.venv/bin/bodypose bench output-images -n 200
+
+# index it
 preprocessing/.venv/bin/bodypose run output-images --thumbs
 
 # run the live app — no configuration, it finds the index
 cd live && npm run dev
 ```
+
+The pose model downloads on first use, or is reused from `live/public/mediapipe/`
+if `npm run setup` already fetched it, so both halves load the same file.
 
 `bodypose datasets` lists what is in `INPUT/` and what has been indexed. If more
 than one index exists, tell the live app which to use with
@@ -89,21 +99,30 @@ than one index exists, tell the live app which to use with
 
 Then open http://127.0.0.1:5173 and hit **start camera**.
 
-## Measured on this machine
+## Performance
 
-M4 Pro, 14 cores, images on the internal SSD, 1024px decode:
+Detection throughput depends on the machine, the delegate and the image sizes,
+so the pipeline measures rather than assumes:
 
-| | |
-|---|---|
-| Pose detection, ANE | **7.46 ms/img** (134 img/s, one thread) |
-| Pose detection, CPU | 53.58 ms/img (19 img/s) |
-| End-to-end, 8 threads | **~138 img/s** — plateaus at 4 threads; the ANE is one shared block, not per-core |
-| Search, 43k poses | well under 1 ms per frame in the browser |
+```bash
+bodypose bench output-images -n 200
+```
 
-So the full ~530k-image corpus is roughly an hour of detection, and the curated
-43k `output-images` set about five minutes. Index building afterwards takes
-seconds and can be re-run at different filter thresholds without touching the
-images again — which is why detection and building are separate commands.
+That times GPU against CPU at several thread counts over a sample of the real
+dataset and estimates the wall-clock for a 600k-image corpus. Roughly half the
+cost is JPEG decoding, which is CPU work whichever delegate runs the model, so
+GPU and CPU often land closer together than expected.
+
+For reference, on an M4 Pro with the `--backend vision` path (Apple Vision on
+the Neural Engine, macOS only): 7.46 ms/img, 134 img/s single-threaded, ~138
+img/s end-to-end at 8 threads, plateauing at 4. That is the ceiling to beat, not
+what MediaPipe delivers.
+
+Search itself is well under 1 ms per frame in the browser at 43k poses.
+
+Index building takes seconds and can be re-run at different filter thresholds
+without touching the images again — which is why detection and building are
+separate commands.
 
 ## What the original drive held
 

@@ -9,8 +9,8 @@ The images do not have to physically live here. A symlink is the normal case,
 and keeps the repository small while letting the images sit on whatever volume
 suits:
 
-    ln -s /Volumes/SS2_OSX/output-images   INPUT/output-images
-    ln -s /Volumes/SS2_OSX/DATASETS_BACKUP INPUT/datasets-backup
+    ln -s /media/you/SS2_OSX/output-images   INPUT/output-images
+    ln -s /media/you/SS2_OSX/DATASETS_BACKUP INPUT/datasets-backup
 
 Because a dataset is identified by name rather than by absolute path, an index
 built against one location still resolves after you move the images — repoint
