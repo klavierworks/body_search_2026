@@ -22,7 +22,17 @@ import { NUM_JOINTS, type Keypoints } from './encoding'
 export interface Person {
   /** Stable for as long as this person is tracked. Never reused. */
   id: number
+  /** The latest detection, as it came out of the model. */
   kp: Keypoints
+  /**
+   * The same pose, smoothed over time — what gets drawn, and what the image is
+   * registered onto. BlazePose's landmarks wander by a pixel or two frame to
+   * frame even on a body holding still, which reads as a shimmer on the
+   * skeleton and, through the bounding box, as a twitch on the photograph.
+   * Kept separate from `kp` so the search still queries with what was actually
+   * detected; that path has its own smoothing, over the encoded vector.
+   */
+  render: Keypoints
   /** Centroid of the confident joints, in normalised camera coordinates. */
   cx: number
   cy: number
@@ -42,6 +52,11 @@ export interface TrackerOptions {
   maxDistance?: number
   /** How long a track survives with no detection before it is retired. */
   graceMs?: number
+  /**
+   * Time constant for the drawn pose, in ms — roughly how long it takes to
+   * close two thirds of the gap to the latest detection. 0 disables it.
+   */
+  smoothMs?: number
 }
 
 export interface TrackerUpdate {
@@ -81,17 +96,36 @@ export function figureExtent(
   return { cx: sx / n, cy: sy / n, size: Math.max(Math.hypot(w, h), 1e-3) }
 }
 
+/**
+ * Move `current` a fraction `k` of the way towards `target`, in place.
+ *
+ * Confidences are eased along with the coordinates, so a joint the detector is
+ * unsure about ramps across the drawing threshold instead of flickering over it
+ * several times a second.
+ */
+function ease(current: Keypoints, target: Keypoints, k: number): void {
+  if (k >= 1) {
+    current.set(target)
+    return
+  }
+  for (let i = 0; i < current.length; i++) {
+    current[i] += (target[i] - current[i]) * k
+  }
+}
+
 export class PersonTracker {
   private tracks: Person[] = []
   private nextId = 1
   private readonly confFloor: number
   private readonly maxDistance: number
   private readonly graceMs: number
+  private readonly smoothMs: number
 
   constructor(options: TrackerOptions = {}) {
     this.confFloor = options.confFloor ?? 0.1
     this.maxDistance = options.maxDistance ?? 0.6
     this.graceMs = options.graceMs ?? 350
+    this.smoothMs = options.smoothMs ?? 60
   }
 
   /**
@@ -130,6 +164,11 @@ export class PersonTracker {
       takenDet.add(pair.det)
       const track = this.tracks[pair.track]
       const det = detections[pair.det]
+      // Framerate-independent: the fraction of the gap closed comes from the
+      // time since this track was last seen, so the pose settles at the same
+      // rate whether the camera delivers 15fps or 60.
+      const dt = nowMs - track.lastSeenMs
+      ease(track.render, det.kp, this.smoothMs > 0 ? 1 - Math.exp(-dt / this.smoothMs) : 1)
       track.kp = det.kp
       track.cx = det.cx
       track.cy = det.cy
@@ -154,6 +193,7 @@ export class PersonTracker {
       this.tracks.push({
         id: this.nextId++,
         kp: det.kp,
+        render: det.kp.slice(),
         cx: det.cx,
         cy: det.cy,
         size: det.size,

@@ -53,8 +53,11 @@ const view = {
   showCamera: false,
 }
 
-const tracker = new PersonTracker()
-const renderer = new Renderer(scene)
+// The three time constants that decide how settled the overlay looks. All in
+// ms, all "time to close two thirds of a gap"; raise them for calmer, lower
+// them for more responsive.
+const tracker = new PersonTracker({ smoothMs: 60 })
+const renderer = new Renderer(scene, { followMs: 130, followSizeMs: 450 })
 
 /**
  * Everything that has to persist between frames for one person: the smoother
@@ -204,7 +207,7 @@ function query(index: SearchIndex, tracked: readonly Person[], now: number) {
     if (!match) continue
     claimed.add(match.pathId)
     state.shown = match
-    if (changed) renderer.push(person.id, match, index.imageUrl(match), person.kp)
+    if (changed) renderer.push(person.id, match, index.imageUrl(match), person.render)
   }
 
   report(tracked)

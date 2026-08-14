@@ -90,6 +90,31 @@ describe('PersonTracker', () => {
     expect(people.find((p) => p.id === 1)?.visible).toBe(false)
   })
 
+  it('eases the drawn pose towards the detection without touching the raw one', () => {
+    const tracker = new PersonTracker({ smoothMs: 60 })
+    tracker.update([figure(0.3, 0.3)], 0)
+    const { people } = tracker.update([figure(0.4, 0.3)], 16)
+
+    const person = people[0]
+    // The query still sees exactly what was detected.
+    expect(person.kp[0]).toBeCloseTo(0.4, 5)
+    // The drawing is on its way there, still nearer where it was.
+    expect(person.render[0]).toBeGreaterThan(0.3)
+    expect(person.render[0]).toBeLessThan(0.35)
+  })
+
+  it('settles the drawn pose at the same rate whatever the framerate', () => {
+    const rendered = (frames: number[]) => {
+      const tracker = new PersonTracker({ smoothMs: 60 })
+      tracker.update([figure(0.3, 0.3)], 0)
+      let x = 0
+      for (const t of frames) x = tracker.update([figure(0.4, 0.3)], t).people[0].render[0]
+      return x
+    }
+    // The same 100 ms of movement, delivered as one frame or as six.
+    expect(rendered([100])).toBeCloseTo(rendered([16, 33, 50, 67, 83, 100]), 4)
+  })
+
   it('ignores a pose with no confident joints', () => {
     const tracker = new PersonTracker()
     const blank = new Float32Array(NUM_JOINTS * 3)

@@ -62,10 +62,19 @@ export interface RendererOptions {
   /** Confidence below which a joint is not drawn. */
   confFloor?: number
   /**
-   * Time constant for the image following the body, in ms. Roughly how long it
-   * takes to close two thirds of a gap. 0 pins the image to the raw box.
+   * Time constant for the image following the body's position, in ms — roughly
+   * how long it takes to close two thirds of a gap. 0 pins it to the raw box.
    */
   followMs?: number
+  /**
+   * The same, for the image's size. Deliberately slower: a figure's box changes
+   * size in steps rather than smoothly, because it grows the moment a joint
+   * crosses the confidence floor — an ankle appearing as you step forward adds
+   * a tenth of your height at one frame's notice. Position error shows up as
+   * lag, which a short constant hides; size error shows up as a pulse in the
+   * photograph, which is far more visible, so it is worth trading lag for.
+   */
+  followSizeMs?: number
 }
 
 /**
@@ -90,7 +99,15 @@ export class Renderer {
   private readonly trail: number
   private readonly confFloor: number
   private readonly followMs: number
+  private readonly followSizeMs: number
   private lastDrawAt = 0
+  /**
+   * The smoothed on-screen box per person, kept outside the layers so that it
+   * survives a change of match. A new photograph arriving picks up the box its
+   * predecessor had settled into instead of snapping to the raw one, which is
+   * what would otherwise make every match change land with a jolt.
+   */
+  private readonly boxes = new Map<number, Box>()
 
   /** Camera aspect ratio, for mapping normalised pose coords to the canvas. */
   private aspect = 16 / 9
@@ -105,7 +122,8 @@ export class Renderer {
     this.fadeMs = options.fadeMs ?? 900
     this.trail = options.trail ?? 3
     this.confFloor = options.confFloor ?? 0.1
-    this.followMs = options.followMs ?? 70
+    this.followMs = options.followMs ?? 130
+    this.followSizeMs = options.followSizeMs ?? 450
   }
 
   setCameraAspect(width: number, height: number): void {
@@ -133,7 +151,11 @@ export class Renderer {
    */
   push(trackId: number, match: Match, url: string, kp: Keypoints): void {
     const image = this.imageFor(match.path, url)
-    const box = this.liveBox(kp)
+    // Where this person's images have settled, not where the raw box is this
+    // instant. Only a person whose very first match arrives before their first
+    // draw has no settled box yet.
+    const settled = this.boxes.get(trackId)
+    const box = settled ? { ...settled } : this.liveBox(kp)
     if (!box) return
 
     const now = performance.now()
@@ -171,38 +193,56 @@ export class Renderer {
     )
 
     if (this.showSkeleton) {
-      for (const person of people) this.drawSkeleton(person.kp, personColor(person.id))
+      // The smoothed pose, so the skeleton and the image it carries agree with
+      // each other and neither shimmers.
+      for (const person of people) this.drawSkeleton(person.render, personColor(person.id))
     }
   }
 
   /**
    * Re-register each person's current image on where their body is now.
    *
-   * Chased rather than snapped, because the box comes straight from the
-   * detector and a joint crossing the confidence floor — an ankle appearing as
-   * you step forward — moves it in one step. Snapping to that makes the
-   * photograph jump; easing turns it into a glide. The time constant is short
-   * enough that the image is never visibly behind the skeleton.
+   * Chased rather than snapped: the target is a bounding box over whichever
+   * joints happen to be above the confidence floor this frame, and that set
+   * changes, so the raw box arrives in steps. Position and size are chased at
+   * different rates — see `followSizeMs`.
    *
-   * Framerate-independent: the fraction closed per frame is derived from the
-   * elapsed time, so this behaves the same at 30fps and at 120.
+   * Framerate-independent: the fraction closed per frame comes from the elapsed
+   * time, so this behaves the same at 30fps and at 120.
    */
   private follow(people: readonly Person[], now: number): void {
     const dt = this.lastDrawAt ? Math.min(now - this.lastDrawAt, 100) : 0
     this.lastDrawAt = now
     if (dt <= 0) return
-    const k = this.followMs > 0 ? 1 - Math.exp(-dt / this.followMs) : 1
+    const kPos = this.followMs > 0 ? 1 - Math.exp(-dt / this.followMs) : 1
+    const kSize = this.followSizeMs > 0 ? 1 - Math.exp(-dt / this.followSizeMs) : 1
 
+    const present = new Set<number>()
     for (const person of people) {
-      const layer = this.layers.find((l) => l.trackId === person.id)
-      if (!layer || layer.fadeFrom !== null) continue
-      const target = this.liveBox(person.kp)
+      present.add(person.id)
+      const target = this.liveBox(person.render)
       if (!target) continue
-      const { box } = layer
-      box.x += (target.x - box.x) * k
-      box.y += (target.y - box.y) * k
-      box.width += (target.width - box.width) * k
-      box.height += (target.height - box.height) * k
+
+      let box = this.boxes.get(person.id)
+      if (!box) {
+        // First sight of this person: nothing to ease from.
+        box = { ...target }
+        this.boxes.set(person.id, box)
+      } else {
+        box.x += (target.x - box.x) * kPos
+        box.y += (target.y - box.y) * kPos
+        box.width += (target.width - box.width) * kSize
+        box.height += (target.height - box.height) * kSize
+      }
+
+      // Only the current image follows. Anything superseded keeps the box it
+      // held at that moment and fades from there.
+      const layer = this.layers.find((l) => l.trackId === person.id)
+      if (layer && layer.fadeFrom === null) Object.assign(layer.box, box)
+    }
+
+    for (const id of this.boxes.keys()) {
+      if (!present.has(id)) this.boxes.delete(id)
     }
   }
 
@@ -331,5 +371,6 @@ export class Renderer {
 
   clear(): void {
     this.layers = []
+    this.boxes.clear()
   }
 }
