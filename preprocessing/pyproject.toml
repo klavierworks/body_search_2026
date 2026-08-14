@@ -11,7 +11,15 @@ dependencies = [
     # browser — which is what keeps the two vector spaces identical and what
     # makes this run anywhere. Pillow decodes; its JPEG draft() path is what
     # stops a 40-megapixel scan being decoded in full for a 1024px detection.
-    "mediapipe>=0.10.14",
+    # Pinned below 1.0 on purpose. MediaPipe 1.0.0 restructured the Python
+    # package around a C API and dropped the GPU inference calculators from the
+    # Linux wheel: 1.0.0's libmediapipe.so registers only
+    # InferenceCalculatorCpuImpl and InferenceCalculatorXnnpackImpl, with zero
+    # EGL/GL entry points, so `--delegate gpu` fails graph validation with
+    # "ValidatedGraphConfig Initialization failed". The 0.10.x wheel carries
+    # InferenceCalculatorGlImpl, InferenceCalculatorGlAdvancedImpl and 158 EGL
+    # symbols, and runs on the GPU.
+    "mediapipe>=0.10.14,<1.0",
     "pillow>=10.0",
 ]
 
