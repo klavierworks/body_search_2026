@@ -7,8 +7,17 @@ Two halves:
 
 | | |
 |---|---|
-| [`preprocessing/`](preprocessing/) | Python CLI. Runs a pose detector on the Apple Neural Engine over a folder tree and builds a searchable index. |
+| [`INPUT/`](INPUT/) | Datasets, one folder per dataset. Usually symlinks to images living elsewhere. |
+| [`OUTPUT/`](OUTPUT/) | The index built from each dataset. Derived data, gitignored. |
+| [`preprocessing/`](preprocessing/) | Python CLI. Runs a pose detector on the Apple Neural Engine over a dataset and builds the index. |
 | [`live/`](live/) | TypeScript + Vite. Webcam → MediaPipe → nearest neighbour → the matching image. |
+
+A dataset is referred to by name, not by path. `bodypose run output-images`
+reads `INPUT/output-images` and writes `OUTPUT/output-images`, and the live app
+finds both without being told where anything is. The images themselves can sit
+on any volume, because `INPUT/<dataset>` is normally a symlink — and since the
+index records the dataset name rather than an absolute path, repointing that
+symlink at a local copy does not invalidate it.
 
 ## How the matching works
 
@@ -48,7 +57,7 @@ keypoints, so both reduce to the same vector.
 That is an assumption worth testing rather than trusting, so it is testable:
 
 ```bash
-bodypose doctor /path/to/images -n 60
+bodypose doctor output-images -n 60
 ```
 
 runs both detectors over the same sample and reports how closely their vectors
@@ -60,16 +69,23 @@ index with the same detector the browser uses, trading speed for exactness.
 ## Quick start
 
 ```bash
-# 1. index some images  (start small — the 43k output-images set takes ~5 min)
-cd preprocessing
-python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python -m bodypose run /Volumes/SS2_OSX/output-images --thumbs
+# once
+cd preprocessing && python3 -m venv .venv && .venv/bin/pip install -e . && cd ..
+cd live && npm install && npm run setup && cd ..
 
-# 2. run the live app
-cd ../live
-npm install && npm run setup
-BODY_ARTIFACTS=../preprocessing/out npm run dev
+# point a dataset at some images
+ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+
+# index it  (the 43k output-images set takes ~5 min)
+preprocessing/.venv/bin/bodypose run output-images --thumbs
+
+# run the live app — no configuration, it finds the index
+cd live && npm run dev
 ```
+
+`bodypose datasets` lists what is in `INPUT/` and what has been indexed. If more
+than one index exists, tell the live app which to use with
+`BODY_DATASET=output-images npm run dev`.
 
 Then open http://127.0.0.1:5173 and hit **start camera**.
 

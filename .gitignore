@@ -12,9 +12,22 @@ __pycache__/
 out/
 out-*/
 
+# Datasets and the indexes built from them. INPUT/ holds symlinks to image
+# libraries that live elsewhere; OUTPUT/ is entirely derived data. Both READMEs
+# are kept, since they document the layout the CLI depends on.
+INPUT/*
+!INPUT/README.md
+OUTPUT/*
+!OUTPUT/README.md
+
 # live
 node_modules/
 dist/
 live/public/mediapipe/
 
 .DS_Store
+
+INPUT/*
+!INPUT/README.md
+OUTPUT/*
+!OUTPUT/README.md

@@ -20,19 +20,28 @@ lag the newest Python releases — 3.11 or 3.12 is the safe choice.
 
 ## Use
 
-```bash
-bodypose run /path/to/images --thumbs        # detect + build + thumbnails
-```
-
-Or as separate steps, which is usually what you want:
+Datasets live in `INPUT/` and are named, not pathed:
 
 ```bash
-bodypose detect /path/to/images              # slow: reads every image
-bodypose build --min-keypoints 10            # seconds: re-cut without re-reading
-bodypose thumbs                              # web-sized copies of what survived
+ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+bodypose run output-images --thumbs          # detect + build + thumbnails
 ```
 
-Everything lands in `out/` by default (`-o` to change, or `BODYPOSE_OUT`).
+That reads `INPUT/output-images` and writes `OUTPUT/output-images`. Or as
+separate steps, which is usually what you want:
+
+```bash
+bodypose detect output-images                # slow: reads every image
+bodypose build output-images --min-keypoints 10   # seconds: re-cut without re-reading
+bodypose thumbs output-images                # web-sized copies of what survived
+```
+
+The dataset name can be omitted for `build`, `thumbs`, `stats` and `query` when
+there is only one index in `OUTPUT/`. `-o` overrides the output directory, and
+an absolute path works anywhere a dataset name does.
+
+`BODY_ROOT`, `BODY_INPUT` and `BODY_OUTPUT` override the three directories if
+you need the layout somewhere else.
 
 | command | |
 |---|---|
@@ -40,6 +49,7 @@ Everything lands in `out/` by default (`-o` to change, or `BODYPOSE_OUT`).
 | `build` | Applies filters and writes the index. Cheap, re-run freely. |
 | `thumbs` | Web-sized JPEGs for indexed images only, and points `index.json` at them. |
 | `doctor` | Compares Vision against MediaPipe on a sample. See below. |
+| `datasets` | Lists what is in `INPUT/` and what has been indexed into `OUTPUT/`. |
 | `stats` | Summarises a built index. |
 | `query` | Nearest indexed poses to a query image, from the terminal. |
 
@@ -96,7 +106,7 @@ same 17 COCO keypoints, but that is an assumption, and this tests it:
 
 ```bash
 pip install -e '.[mediapipe]'
-bodypose doctor /path/to/images -n 60
+bodypose doctor output-images -n 60
 ```
 
 It reports how closely the two agree, which joints disagree worst, and — the
@@ -168,15 +178,19 @@ print('wrote', len(cases), 'cases')"
 ## Output
 
 ```
-out/
+OUTPUT/<dataset>/
   detections.jsonl   append-only, one line per image — the resume log
   detect-meta.json   what was scanned, with what, on which device
-  index.json         encoding parameters, filters, counts
+  index.json         encoding parameters, filters, counts, dataset name
   vectors.bin        float32 LE, N x 34, unit norm per row
   weights.bin        float32 LE, N x 17, per-joint confidence
   meta.json          columnar: paths, bounding boxes, scores, mirror flags
   thumbs/            optional, mirrors the source tree
 ```
+
+`index.json` records the dataset name as well as the absolute path the images
+had at build time. The name is what gets used, so moving the repository or
+repointing the symlink at a local copy leaves the index valid.
 
 The browser fetches `vectors.bin` and `weights.bin` straight into typed arrays —
 43k poses is about 5.9 MB and 2.9 MB respectively.

@@ -8,8 +8,14 @@ import os
 import sys
 
 from .encoding import EncodingParams
-
-DEFAULT_OUT = os.environ.get("BODYPOSE_OUT", "out")
+from .paths import (
+    default_out_dir,
+    input_root,
+    list_datasets,
+    list_indexes,
+    output_root,
+    resolve_dataset,
+)
 
 
 def _add_encoding_args(p: argparse.ArgumentParser) -> None:
@@ -28,10 +34,28 @@ def _add_encoding_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_exclude_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--exclude", action="append", default=[], metavar="PATTERN",
+        help="skip folders whose name matches PATTERN while walking the dataset; "
+             "repeatable, globs allowed (e.g. --exclude google-ls22500)",
+    )
+
+
 def _params(args) -> EncodingParams:
     params = EncodingParams(origin=args.origin, scale=args.scale, conf_floor=args.conf_floor)
     params.validate()
     return params
+
+
+DATASET_HELP = (
+    "dataset to read: a folder inside INPUT/, so `output-images` means "
+    "INPUT/output-images. An absolute path also works."
+)
+INDEX_HELP = (
+    "which built index to use: a folder inside OUTPUT/, so `output-images` means "
+    "OUTPUT/output-images. Omit it if there is only one."
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,26 +64,32 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
+layout — everything is relative to the repository:
+
+  INPUT/<dataset>/     source images (usually a symlink to wherever they live)
+  OUTPUT/<dataset>/    the index built from it
+
 typical run:
 
-  bodypose run /Volumes/SS2_OSX/output-images --thumbs
-  cd ../live && BODY_ARTIFACTS=../preprocessing/out npm run dev
+  ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+  bodypose run output-images --thumbs
+  cd live && npm run dev
 
 detection is the expensive step and resumes if interrupted; build is seconds
-and can be rerun with different filters without touching the drive again.
+and can be rerun with different filters without re-reading the images.
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # ---- detect --------------------------------------------------------
-    d = sub.add_parser("detect", help="run pose detection over a folder tree (the slow step)")
-    d.add_argument("root", help="top-level folder to walk, recursively")
-    d.add_argument("-o", "--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    d = sub.add_parser("detect", help="run pose detection over a dataset (the slow step)")
+    d.add_argument("dataset", help=DATASET_HELP)
+    d.add_argument("-o", "--out", default=None, help="override the output directory")
     d.add_argument(
         "--backend", choices=("vision", "mediapipe"), default="vision",
         help="vision = Apple Neural Engine (fast, default); mediapipe = same detector as the browser (slow)",
     )
-    d.add_argument("-j", "--workers", type=int, default=0, help="worker threads (default: cores - 2, capped at 10)")
+    d.add_argument("-j", "--workers", type=int, default=0, help="worker threads (default: cores - 2, capped at 8)")
     d.add_argument(
         "--max-side", type=int, default=1024,
         help="decode images down to this longest side before detection (default: 1024)",
@@ -68,16 +98,12 @@ and can be rerun with different filters without touching the drive again.
     d.add_argument("--limit", type=int, default=0, help="stop after N new images — for a quick trial run")
     d.add_argument("--restart", action="store_true", help="discard existing detections and start over")
     d.add_argument("--mp-model", default=None, help="path to pose_landmarker_*.task (mediapipe backend only)")
-    d.add_argument(
-        "--exclude", action="append", default=[], metavar="PATTERN",
-        help="skip folders whose name or path matches PATTERN; repeatable, globs allowed "
-             "(e.g. --exclude google-ls22500 --exclude 'rm-1?')",
-    )
-
+    _add_exclude_arg(d)
 
     # ---- build ---------------------------------------------------------
     b = sub.add_parser("build", help="turn detections into a searchable index (the fast step)")
-    b.add_argument("-o", "--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    b.add_argument("dataset", nargs="?", default=None, help=INDEX_HELP)
+    b.add_argument("-o", "--out", default=None, help="override the output directory")
     b.add_argument("--min-keypoints", type=int, default=8, help="joints that must be visible (default: 8)")
     b.add_argument("--min-score", type=float, default=0.3, help="minimum detector confidence (default: 0.3)")
     b.add_argument(
@@ -90,13 +116,13 @@ and can be rerun with different filters without touching the drive again.
         "--include-mirror", action="store_true",
         help="also index the left-right reflection of every pose — doubles recall, doubles index size",
     )
-    b.add_argument("--images-root", default=None, help="override the root recorded at detect time")
+    b.add_argument("--images-root", default=None, help="override where the images are read from")
     _add_encoding_args(b)
 
     # ---- run -----------------------------------------------------------
     r = sub.add_parser("run", help="detect then build in one go")
-    r.add_argument("root", help="top-level folder to walk, recursively")
-    r.add_argument("-o", "--out", default=DEFAULT_OUT, help=f"output directory (default: {DEFAULT_OUT})")
+    r.add_argument("dataset", help=DATASET_HELP)
+    r.add_argument("-o", "--out", default=None, help="override the output directory")
     r.add_argument("--backend", choices=("vision", "mediapipe"), default="vision")
     r.add_argument("-j", "--workers", type=int, default=0)
     r.add_argument("--max-side", type=int, default=1024)
@@ -104,24 +130,22 @@ and can be rerun with different filters without touching the drive again.
     r.add_argument("--limit", type=int, default=0)
     r.add_argument("--restart", action="store_true")
     r.add_argument("--mp-model", default=None)
-    r.add_argument(
-        "--exclude", action="append", default=[], metavar="PATTERN",
-        help="skip folders whose name or path matches PATTERN; repeatable, globs allowed "
-             "(e.g. --exclude google-ls22500 --exclude 'rm-1?')",
-    )
+    _add_exclude_arg(r)
     r.add_argument("--min-keypoints", type=int, default=8)
     r.add_argument("--min-score", type=float, default=0.3)
     r.add_argument("--min-bbox-frac", type=float, default=0.05)
     r.add_argument("--no-torso", action="store_true")
     r.add_argument("--max-poses-per-image", type=int, default=2)
     r.add_argument("--include-mirror", action="store_true")
+    r.add_argument("--images-root", default=None)
     r.add_argument("--thumbs", action="store_true", help="also generate web-sized thumbnails")
     r.add_argument("--thumb-size", type=int, default=1000)
     _add_encoding_args(r)
 
     # ---- thumbs --------------------------------------------------------
     t = sub.add_parser("thumbs", help="generate web-sized thumbnails for indexed images")
-    t.add_argument("-o", "--out", default=DEFAULT_OUT)
+    t.add_argument("dataset", nargs="?", default=None, help=INDEX_HELP)
+    t.add_argument("-o", "--out", default=None)
     t.add_argument("--size", type=int, default=1000, help="longest side in pixels (default: 1000)")
     t.add_argument("--quality", type=float, default=0.82, help="JPEG quality 0-1 (default: 0.82)")
     t.add_argument("-j", "--workers", type=int, default=8)
@@ -131,28 +155,77 @@ and can be rerun with different filters without touching the drive again.
         "doctor",
         help="compare Vision against MediaPipe on a sample — checks the two detectors agree",
     )
-    doc.add_argument("root", help="folder to sample images from")
+    doc.add_argument("dataset", help=DATASET_HELP)
     doc.add_argument("-n", "--sample", type=int, default=60, help="images to test (default: 60)")
     doc.add_argument("--seed", type=int, default=0)
     doc.add_argument("--max-side", type=int, default=1024)
     doc.add_argument("--mp-model", default=None)
     _add_encoding_args(doc)
 
-    # ---- stats / query --------------------------------------------------
+    # ---- datasets / stats / query ---------------------------------------
+    sub.add_parser("datasets", help="list what is in INPUT/ and what has been indexed into OUTPUT/")
+
     s = sub.add_parser("stats", help="summarise a built index")
-    s.add_argument("-o", "--out", default=DEFAULT_OUT)
+    s.add_argument("dataset", nargs="?", default=None, help=INDEX_HELP)
+    s.add_argument("-o", "--out", default=None)
 
     q = sub.add_parser("query", help="find the nearest indexed poses to a query image")
     q.add_argument("image", help="path to a query image")
-    q.add_argument("-o", "--out", default=DEFAULT_OUT)
+    q.add_argument("dataset", nargs="?", default=None, help=INDEX_HELP)
+    q.add_argument("-o", "--out", default=None)
     q.add_argument("-k", "--top", type=int, default=10)
     q.add_argument("--max-side", type=int, default=1024)
 
     return parser
 
 
+def _input_dir(name: str) -> tuple[str, str | None]:
+    """Resolve a dataset argument, failing with something actionable."""
+    absolute, dataset = resolve_dataset(name)
+    if not os.path.isdir(absolute):
+        available = list_datasets()
+        message = [f"no such dataset: {name}", f"  looked in {input_root()}"]
+        if available:
+            message.append("  available: " + ", ".join(available))
+        else:
+            message.append(
+                "  INPUT/ is empty. Link a dataset into it, for example:\n"
+                f"    ln -s /Volumes/SS2_OSX/output-images {os.path.join(input_root(), 'output-images')}"
+            )
+        raise SystemExit("\n".join(message))
+    return absolute, dataset
+
+
+def _output_dir(args, *, must_exist: bool) -> str:
+    """Where an index lives, from --out, a dataset name, or the only one there."""
+    if args.out:
+        return os.path.abspath(args.out)
+
+    name = getattr(args, "dataset", None)
+    if name:
+        if os.path.isabs(name):
+            return os.path.abspath(name)
+        return os.path.join(output_root(), name)
+
+    built = list_indexes()
+    if len(built) == 1:
+        return os.path.join(output_root(), built[0])
+    if not built:
+        raise SystemExit(
+            f"no indexes found in {output_root()}\n"
+            "  run `bodypose run <dataset>` first"
+        )
+    raise SystemExit(
+        f"several indexes in {output_root()} — name the one you want:\n"
+        + "\n".join(f"  {name}" for name in built)
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "datasets":
+        return _datasets()
 
     if args.command == "detect":
         from .detect import run_detect
@@ -171,25 +244,31 @@ def main(argv: list[str] | None = None) -> int:
         from .build import run_build
 
         run_detect(_detect_config(args))
-        run_build(_build_config(args))
+        run_build(_build_config(args, must_exist=False))
         if args.thumbs:
             from .thumbs import run_thumbs
 
-            run_thumbs(args.out, max_side=args.thumb_size)
+            run_thumbs(_output_dir(args, must_exist=False), max_side=args.thumb_size)
         return 0
 
     if args.command == "thumbs":
         from .thumbs import run_thumbs
 
-        run_thumbs(args.out, max_side=args.size, quality=args.quality, workers=args.workers)
+        run_thumbs(
+            _output_dir(args, must_exist=True),
+            max_side=args.size,
+            quality=args.quality,
+            workers=args.workers,
+        )
         return 0
 
     if args.command == "doctor":
         from .doctor import DoctorConfig, run_doctor
 
+        absolute, _ = _input_dir(args.dataset)
         run_doctor(
             DoctorConfig(
-                root=args.root,
+                root=absolute,
                 sample=args.sample,
                 seed=args.seed,
                 max_side=args.max_side,
@@ -200,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "stats":
-        return _stats(args.out)
+        return _stats(_output_dir(args, must_exist=True))
 
     if args.command == "query":
         return _query(args)
@@ -211,9 +290,11 @@ def main(argv: list[str] | None = None) -> int:
 def _detect_config(args):
     from .detect import DetectConfig
 
+    absolute, dataset = _input_dir(args.dataset)
+    out = args.out or default_out_dir(dataset, absolute)
     return DetectConfig(
-        root=args.root,
-        out_dir=args.out,
+        root=absolute,
+        out_dir=os.path.abspath(out),
         backend=args.backend,
         workers=args.workers,
         max_side=args.max_side,
@@ -225,11 +306,17 @@ def _detect_config(args):
     )
 
 
-def _build_config(args):
+def _build_config(args, must_exist: bool = True):
     from .build import BuildConfig, Filters
 
+    if args.command == "run":
+        absolute, dataset = _input_dir(args.dataset)
+        out_dir = os.path.abspath(args.out or default_out_dir(dataset, absolute))
+    else:
+        out_dir = _output_dir(args, must_exist=must_exist)
+
     return BuildConfig(
-        out_dir=args.out,
+        out_dir=out_dir,
         filters=Filters(
             min_keypoints=args.min_keypoints,
             min_score=args.min_score,
@@ -243,12 +330,42 @@ def _build_config(args):
     )
 
 
+def _datasets() -> int:
+    available = list_datasets()
+    built = set(list_indexes())
+
+    print(f"INPUT   {input_root()}")
+    if not available:
+        print("  (empty — link a dataset in, e.g.")
+        print(f"   ln -s /Volumes/SS2_OSX/output-images {os.path.join(input_root(), 'output-images')})")
+    for name in available:
+        target = os.path.join(input_root(), name)
+        where = os.path.realpath(target)
+        link = f"  -> {where}" if where != os.path.abspath(target) else ""
+        mark = "indexed" if name in built else "not indexed"
+        print(f"  {name:<28} {mark}{link}")
+
+    print(f"\nOUTPUT  {output_root()}")
+    if not built:
+        print("  (nothing built yet)")
+    for name in sorted(built):
+        index_path = os.path.join(output_root(), name, "index.json")
+        try:
+            with open(index_path, "r", encoding="utf-8") as fh:
+                index = json.load(fh)
+            print(f"  {name:<28} {index['count']:,} poses from {index['images_with_figures']:,} images")
+        except (OSError, KeyError, json.JSONDecodeError):
+            print(f"  {name:<28} (unreadable index.json)")
+    return 0
+
+
 def _stats(out_dir: str) -> int:
     from .build import load_index
 
     index, vectors, weights, meta = load_index(out_dir)
     print(json.dumps(
         {
+            "dataset": index.get("dataset"),
             "count": index["count"],
             "unique_images": len(meta["paths"]),
             "images_scanned": index.get("images_scanned"),
@@ -274,7 +391,7 @@ def _query(args) -> int:
     from .build import load_index
     from .encoding import EncodingParams, encode
 
-    index, vectors, weights, meta = load_index(args.out)
+    index, vectors, weights, meta = load_index(_output_dir(args, must_exist=True))
     params = EncodingParams(
         origin=index["encoding"]["origin"],
         scale=index["encoding"]["scale"],

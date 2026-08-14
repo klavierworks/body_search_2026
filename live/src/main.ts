@@ -60,9 +60,9 @@ async function main() {
       'Could not load the pose index.\n\n' +
         `${err instanceof Error ? err.message : String(err)}\n\n` +
         'Build one first:\n' +
-        '  preprocessing/.venv/bin/bodypose run /path/to/images --thumbs\n\n' +
-        'then point the dev server at it:\n' +
-        '  BODY_ARTIFACTS=../preprocessing/out npm run dev',
+        '  ln -s /path/to/images INPUT/my-dataset\n' +
+        '  preprocessing/.venv/bin/bodypose run my-dataset --thumbs\n\n' +
+        'The dev server picks it up from OUTPUT/ with no further configuration.',
     )
   }
 

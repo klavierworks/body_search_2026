@@ -6,9 +6,14 @@ Webcam → MediaPipe → nearest indexed pose → the matching image.
 
 ```bash
 npm install
-npm run setup                                  # fetches the MediaPipe runtime + model
-BODY_ARTIFACTS=../preprocessing/out npm run dev
+npm run setup     # fetches the MediaPipe runtime + model
+npm run dev
 ```
+
+No configuration: the server looks in `../OUTPUT/` for a built index and reads
+the images from `../INPUT/<dataset>`, following the dataset name recorded in
+`index.json`. If several indexes exist, name one with
+`BODY_DATASET=output-images npm run dev`.
 
 Open http://127.0.0.1:5173 and press **start camera**.
 
@@ -22,10 +27,14 @@ context and a bare IP is not one.
 
 ### Environment
 
+All optional — the defaults follow the repository layout.
+
 | | |
 |---|---|
-| `BODY_ARTIFACTS` | bodypose output directory. Default `../preprocessing/out`. |
-| `BODY_IMAGES_ROOT` | override the images root recorded in `index.json` — for when the drive is mounted somewhere else than when it was indexed. |
+| `BODY_DATASET` | which index under `OUTPUT/` to serve. Needed only when there is more than one. |
+| `BODY_INPUT` / `BODY_OUTPUT` | move the `INPUT/` and `OUTPUT/` directories elsewhere. |
+| `BODY_ARTIFACTS` | serve an index directory outright, ignoring `OUTPUT/`. |
+| `BODY_IMAGES_ROOT` | override where images are read from. |
 | `BODY_THUMBS_ROOT` | override the thumbnails root. |
 
 ### Controls
@@ -33,17 +42,18 @@ context and a bare IP is not one.
 | | |
 |---|---|
 | <kbd>M</kbd> | mirror — selfie view, so your raised right hand appears on the right |
-| <kbd>C</kbd> | cycle — advance through the top matches instead of holding the best one |
-| <kbd>B</kbd> | draw the matched figure's bounding box |
-| <kbd>H</kbd> | hide the interface |
 | <kbd>S</kbd> | skeleton overlay |
+| <kbd>V</kbd> | camera preview, for checking what the detector sees |
+| <kbd>H</kbd> | hide the interface |
 
 ## How it fits together
 
 Vite is the whole server. Two middlewares in [`vite.config.ts`](vite.config.ts)
-serve things that live outside the project: `/api/*` for the index artefacts and
-`/img/*` for the source images. Neither can be a static mount, because both
-directories are chosen at run time. Requests are resolved with `realpath` and
+serve things that live outside the project: `/api/*` for the index artefacts
+from `OUTPUT/<dataset>/`, and `/img/*` for the source images from
+`INPUT/<dataset>/`. Neither can be a static mount, because `INPUT/<dataset>` is
+normally a symlink to another volume and which dataset is in play is decided at
+run time. Requests are resolved with `realpath` and
 checked for containment afterwards, so a symlink inside an images root cannot
 be used to read the rest of the disk.
 

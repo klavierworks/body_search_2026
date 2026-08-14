@@ -19,6 +19,7 @@ import Quartz
 from Foundation import NSURL
 
 from .build import META_FILE, INDEX_FILE
+from .paths import resolve_images_root
 from .util import Progress, note
 
 THUMBS_DIR = "thumbs"
@@ -73,7 +74,7 @@ def run_thumbs(out_dir: str, max_side: int = 1000, quality: float = 0.82, worker
     with open(meta_path, "r", encoding="utf-8") as fh:
         meta = json.load(fh)
 
-    images_root = index["images_root"]
+    images_root = resolve_images_root(index)
     thumbs_root = os.path.join(out_dir, THUMBS_DIR)
     paths = meta["paths"]
     note(f"thumbnailing {len(paths):,} images to {thumbs_root} at {max_side}px")
