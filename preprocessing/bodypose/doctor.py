@@ -22,7 +22,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-from .backends import make_backend
+from .backends import available_backends, make_backend
 from .discovery import walk_images
 from .encoding import (
     COCO17,
@@ -43,10 +43,21 @@ class DoctorConfig:
     seed: int = 0
     max_side: int = 1024
     mp_model: str | None = None
+    model_size: str = "lite"
+    delegate: str = "auto"
     params: EncodingParams = EncodingParams()
 
 
 def run_doctor(cfg: DoctorConfig) -> dict:
+    if "vision" not in available_backends():
+        raise SystemExit(
+            "doctor compares Apple Vision against MediaPipe, and Vision needs macOS.\n"
+            "  There is nothing to compare here: with --backend mediapipe (the\n"
+            "  default) the index and the browser already run the same detector,\n"
+            "  which is the agreement this command exists to verify.\n"
+            "  To check throughput instead, run: bodypose bench <dataset>"
+        )
+
     note(f"sampling up to {cfg.sample} images from {cfg.root} ...")
     all_paths = list(walk_images(cfg.root))
     if not all_paths:
@@ -57,8 +68,10 @@ def run_doctor(cfg: DoctorConfig) -> dict:
     vision = make_backend("vision", max_side=cfg.max_side, max_poses=1)
     note(f"vision compute device: {vision.device}")
     mediapipe = make_backend(
-        "mediapipe", max_side=cfg.max_side, max_poses=1, mp_model=cfg.mp_model
+        "mediapipe", max_side=cfg.max_side, max_poses=1, mp_model=cfg.mp_model,
+        model_size=cfg.model_size, delegate=cfg.delegate,
     )
+    note(f"mediapipe compute device: {mediapipe.device}")
 
     cos_direct: list[float] = []
     cos_mirrored: list[float] = []
@@ -144,12 +157,14 @@ def run_doctor(cfg: DoctorConfig) -> dict:
     elif cos_direct and mean(cos_direct) < 0.85:
         note("")
         note("  !  Agreement is lower than expected for one shared vector space.")
-        note("     Consider `--backend mediapipe` for the index so both sides")
-        note("     use the same detector, at the cost of a slower run.")
+        note("     Stay on the default `--backend mediapipe` so both sides use")
+        note("     the same detector; --backend vision is the faster option on")
+        note("     Apple silicon but only worth it if this number is high.")
     else:
         note("")
         note("  Conventions match. Vision-indexed vectors are safe to query")
-        note("  with MediaPipe from the browser.")
+        note("  with MediaPipe from the browser, so --backend vision is a")
+        note("  usable speed-up on this machine.")
 
     note("")
     note("  worst-agreeing joints (normalised distance):")

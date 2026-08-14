@@ -7,7 +7,9 @@ import json
 import os
 import sys
 
+from .backends import DEFAULT_BACKEND, available_backends
 from .encoding import EncodingParams
+from .models import DEFAULT_MODEL_SIZE, MODEL_SIZES
 from .paths import (
     default_out_dir,
     input_root,
@@ -16,6 +18,34 @@ from .paths import (
     output_root,
     resolve_dataset,
 )
+
+
+def _add_detector_args(p: argparse.ArgumentParser) -> None:
+    """Flags that decide what runs the model and on what hardware."""
+    g = p.add_argument_group("detector")
+    g.add_argument(
+        "--backend", choices=available_backends(), default=DEFAULT_BACKEND,
+        help="mediapipe = the same detector the browser runs, works everywhere "
+             "(default); vision = Apple Vision on the Neural Engine, macOS only "
+             "and faster, but puts a second detector in the loop",
+    )
+    g.add_argument(
+        "--delegate", choices=("auto", "gpu", "cpu"), default="auto",
+        help="which hardware TFLite runs the model on: gpu (OpenGL/Metal), cpu "
+             "(XNNPACK), or auto to try the GPU and fall back (default: auto). "
+             "Run `bodypose bench` to see which is faster here",
+    )
+    g.add_argument(
+        "--model-size", choices=MODEL_SIZES, default=DEFAULT_MODEL_SIZE,
+        help="BlazePose model: lite is fastest and is what the live app loads, "
+             "heavy is most accurate and several times slower (default: lite). "
+             "Downloaded on first use",
+    )
+    g.add_argument(
+        "--mp-model", default=None,
+        help="explicit path to a pose_landmarker_*.task, instead of the "
+             "downloaded or live/public/mediapipe copy",
+    )
 
 
 def _add_encoding_args(p: argparse.ArgumentParser) -> None:
@@ -71,12 +101,17 @@ layout — everything is relative to the repository:
 
 typical run:
 
-  ln -s /Volumes/SS2_OSX/output-images INPUT/output-images
+  ln -s /path/to/output-images INPUT/output-images
+  bodypose bench output-images          # which delegate is faster here?
   bodypose run output-images --thumbs
   cd live && npm run dev
 
 detection is the expensive step and resumes if interrupted; build is seconds
 and can be rerun with different filters without re-reading the images.
+
+Detection runs MediaPipe BlazePose by default — the same model the browser
+runs — so the offline and live vectors come out of one detector, on Linux,
+macOS or Windows alike.
 """,
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -85,11 +120,7 @@ and can be rerun with different filters without re-reading the images.
     d = sub.add_parser("detect", help="run pose detection over a dataset (the slow step)")
     d.add_argument("dataset", help=DATASET_HELP)
     d.add_argument("-o", "--out", default=None, help="override the output directory")
-    d.add_argument(
-        "--backend", choices=("vision", "mediapipe"), default="vision",
-        help="vision = Apple Neural Engine (fast, default); mediapipe = same detector as the browser (slow)",
-    )
-    d.add_argument("-j", "--workers", type=int, default=0, help="worker threads (default: cores - 2, capped at 8)")
+    d.add_argument("-j", "--workers", type=int, default=0, help="worker threads (default: from cores and delegate)")
     d.add_argument(
         "--max-side", type=int, default=1024,
         help="decode images down to this longest side before detection (default: 1024)",
@@ -97,7 +128,7 @@ and can be rerun with different filters without re-reading the images.
     d.add_argument("--max-poses", type=int, default=3, help="figures to detect per image (default: 3)")
     d.add_argument("--limit", type=int, default=0, help="stop after N new images — for a quick trial run")
     d.add_argument("--restart", action="store_true", help="discard existing detections and start over")
-    d.add_argument("--mp-model", default=None, help="path to pose_landmarker_*.task (mediapipe backend only)")
+    _add_detector_args(d)
     _add_exclude_arg(d)
 
     # ---- build ---------------------------------------------------------
@@ -123,13 +154,12 @@ and can be rerun with different filters without re-reading the images.
     r = sub.add_parser("run", help="detect then build in one go")
     r.add_argument("dataset", help=DATASET_HELP)
     r.add_argument("-o", "--out", default=None, help="override the output directory")
-    r.add_argument("--backend", choices=("vision", "mediapipe"), default="vision")
     r.add_argument("-j", "--workers", type=int, default=0)
     r.add_argument("--max-side", type=int, default=1024)
     r.add_argument("--max-poses", type=int, default=3)
     r.add_argument("--limit", type=int, default=0)
     r.add_argument("--restart", action="store_true")
-    r.add_argument("--mp-model", default=None)
+    _add_detector_args(r)
     _add_exclude_arg(r)
     r.add_argument("--min-keypoints", type=int, default=8)
     r.add_argument("--min-score", type=float, default=0.3)
@@ -159,8 +189,31 @@ and can be rerun with different filters without re-reading the images.
     doc.add_argument("-n", "--sample", type=int, default=60, help="images to test (default: 60)")
     doc.add_argument("--seed", type=int, default=0)
     doc.add_argument("--max-side", type=int, default=1024)
+    doc.add_argument("--delegate", choices=("auto", "gpu", "cpu"), default="auto")
+    doc.add_argument("--model-size", choices=MODEL_SIZES, default=DEFAULT_MODEL_SIZE)
     doc.add_argument("--mp-model", default=None)
     _add_encoding_args(doc)
+
+    # ---- bench ---------------------------------------------------------
+    bn = sub.add_parser(
+        "bench",
+        help="time GPU against CPU on this machine before starting a long run",
+    )
+    bn.add_argument("dataset", help=DATASET_HELP)
+    bn.add_argument("-n", "--sample", type=int, default=120, help="images to time (default: 120)")
+    bn.add_argument("--seed", type=int, default=0)
+    bn.add_argument("--max-side", type=int, default=1024)
+    bn.add_argument("--max-poses", type=int, default=3)
+    bn.add_argument("--model-size", choices=MODEL_SIZES, default=DEFAULT_MODEL_SIZE)
+    bn.add_argument("--mp-model", default=None)
+    bn.add_argument(
+        "-j", "--threads", type=int, action="append", default=[],
+        help="thread count to try; repeatable (default: a spread up to your core count)",
+    )
+    bn.add_argument(
+        "--delegate", action="append", choices=("gpu", "cpu"), default=[],
+        help="delegate to try; repeatable (default: both)",
+    )
 
     # ---- datasets / stats / query ---------------------------------------
     sub.add_parser("datasets", help="list what is in INPUT/ and what has been indexed into OUTPUT/")
@@ -273,7 +326,28 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
                 max_side=args.max_side,
                 mp_model=args.mp_model,
+                model_size=args.model_size,
+                delegate=args.delegate,
                 params=_params(args),
+            )
+        )
+        return 0
+
+    if args.command == "bench":
+        from .bench import BenchConfig, run_bench
+
+        absolute, _ = _input_dir(args.dataset)
+        run_bench(
+            BenchConfig(
+                root=absolute,
+                sample=args.sample,
+                seed=args.seed,
+                max_side=args.max_side,
+                max_poses=args.max_poses,
+                model_size=args.model_size,
+                mp_model=args.mp_model,
+                threads=tuple(args.threads),
+                delegates=tuple(args.delegate) or ("gpu", "cpu"),
             )
         )
         return 0
@@ -300,6 +374,8 @@ def _detect_config(args):
         max_side=args.max_side,
         max_poses=args.max_poses,
         mp_model=args.mp_model,
+        model_size=args.model_size,
+        delegate=args.delegate,
         limit=args.limit,
         restart=args.restart,
         exclude=tuple(args.exclude),
@@ -398,7 +474,16 @@ def _query(args) -> int:
         conf_floor=index["encoding"]["conf_floor"],
     )
 
-    backend = make_backend("vision", max_side=args.max_side, max_poses=1)
+    # Query with whatever built the index. Detecting the query image with a
+    # different model than the corpus would measure the gap between two
+    # detectors as much as the gap between two poses.
+    detector = index.get("detector") or {}
+    backend = make_backend(
+        detector.get("backend") or DEFAULT_BACKEND,
+        max_side=args.max_side,
+        max_poses=1,
+        model_size=detector.get("model_size") or DEFAULT_MODEL_SIZE,
+    )
     result = backend.detect(args.image)
     backend.close()
     if result.error:

@@ -10,13 +10,23 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-Two dependencies do the work: `pyobjc-framework-Vision` for detection and
-`pyobjc-framework-Quartz` for image decoding. Both are thin bindings over
-frameworks already on the machine, so there is **no model to download** for the
-default backend.
+Runs on Linux, macOS and Windows. Two dependencies do the work: `mediapipe` for
+detection and `pillow` for decoding. The pose model is downloaded on first use —
+or reused from `live/public/mediapipe/` if `npm run setup` already fetched it,
+so both halves of the project load the same file.
 
-The optional MediaPipe backend needs `pip install -e '.[mediapipe]'`. Its wheels
-lag the newest Python releases — 3.11 or 3.12 is the safe choice.
+MediaPipe does not publish a wheel for every Python version. 3.11 to 3.13 are
+known to work.
+
+Two optional extras:
+
+```bash
+.venv/bin/pip install -e '.[vision]'   # Apple Vision backend, macOS only
+.venv/bin/pip install -e '.[heif]'     # HEIC/HEIF decoding
+```
+
+`[vision]` is inert off macOS — the pyobjc requirements carry a
+`sys_platform == 'darwin'` marker, so pip skips rather than fails on them.
 
 ## Use
 
@@ -48,7 +58,8 @@ you need the layout somewhere else.
 | `detect` | Walks the tree, runs pose detection, appends to `detections.jsonl`. Resumable. |
 | `build` | Applies filters and writes the index. Cheap, re-run freely. |
 | `thumbs` | Web-sized JPEGs for indexed images only, and points `index.json` at them. |
-| `doctor` | Compares Vision against MediaPipe on a sample. See below. |
+| `bench` | Times GPU against CPU on this machine. Run before a long job. |
+| `doctor` | Compares Vision against MediaPipe on a sample, macOS only. See below. |
 | `datasets` | Lists what is in `INPUT/` and what has been indexed into `OUTPUT/`. |
 | `stats` | Summarises a built index. |
 | `query` | Nearest indexed poses to a query image, from the terminal. |

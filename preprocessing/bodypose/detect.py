@@ -31,35 +31,44 @@ DETECT_META_FILE = "detect-meta.json"
 class DetectConfig:
     root: str
     out_dir: str
-    backend: str = "vision"
-    workers: int = 0            # 0 = pick from core count
+    backend: str = "mediapipe"
+    workers: int = 0            # 0 = pick from core count and delegate
     max_side: int = 1024
     max_poses: int = 3
     mp_model: str | None = None
+    model_size: str = "lite"
+    #: auto | gpu | cpu — which TFLite delegate the mediapipe backend asks for.
+    delegate: str = "auto"
     limit: int = 0              # 0 = no limit, otherwise stop after N new images
     restart: bool = False
     #: Folder names or glob patterns to skip while walking.
     exclude: tuple[str, ...] = ()
 
 
-def _default_workers() -> int:
+def _default_workers(backend: str, delegate: str) -> int:
     """Threads to run detection on.
 
-    pyobjc drops the GIL around the Vision call, so these are genuinely
-    concurrent. Scaling is not linear though — the Neural Engine is one shared
-    block, not a per-core unit. Measured end-to-end (decode + detect) on an M4
-    Pro, 14 cores, images on the internal SSD:
+    Both backends release the GIL inside the native call, so these are
+    genuinely concurrent and the Python side is not the bottleneck. How far it
+    scales depends on what is doing the arithmetic:
 
-        1 thread    66 img/s      6 threads   129 img/s
-        2 threads   96 img/s      8 threads   136 img/s
-        4 threads  135 img/s     10 threads   141 img/s
-                                 12 threads   128 img/s
+      * A GPU delegate is one shared unit, like the Neural Engine. Extra
+        threads do not multiply it; they only overlap decoding with inference,
+        and past a handful they add contention and VRAM for nothing. Decode is
+        roughly half the total cost here, so a few threads is still clearly
+        better than one.
+      * The CPU/XNNPACK delegate is the opposite: it scales with cores, and
+        already runs its own internal thread pool. Oversubscribing hurts, so
+        leaving a couple of cores free is the safe default.
 
-    It plateaus at 4 and stays flat; past 10 the extra contention costs more
-    than it buys. 8 sits in the flat region with headroom for the machine to
-    stay usable, which matters over an hour-long run.
+    Measured numbers for the ANE path are in `vision_ane.py`; it plateaued at 4
+    threads and stayed flat to 10. Nothing equivalent is measured for GPU
+    delegates because it depends entirely on the card — run `bodypose bench` on
+    the machine you actually care about and pass `-j` if the default is wrong.
     """
     cpu = os.cpu_count() or 8
+    if backend == "mediapipe" and delegate == "gpu":
+        return max(2, min(4, cpu - 2))
     return max(2, min(8, cpu - 2))
 
 
@@ -147,27 +156,48 @@ def run_detect(cfg: DetectConfig) -> dict:
         note("nothing to do — every image already has a detection")
         return _write_detect_meta(cfg, root, len(all_paths), cfg.backend, "n/a")
 
-    workers = cfg.workers or _default_workers()
+    # Resolve the delegate before sizing the pool: `--delegate auto` may land on
+    # either GPU or CPU, and the two want very different thread counts. Building
+    # one backend up front also means a broken model path or an unusable GPU
+    # driver fails here, on the main thread, with a readable message — rather
+    # than N times over inside the pool.
+    def new_backend():
+        return make_backend(
+            cfg.backend,
+            max_side=cfg.max_side,
+            max_poses=cfg.max_poses,
+            mp_model=cfg.mp_model,
+            model_size=cfg.model_size,
+            delegate=cfg.delegate,
+        )
+
+    probe = new_backend()
+    device = probe.device
+    resolved_delegate = getattr(probe, "delegate", "n/a")
+    if getattr(probe, "fallback_from", None):
+        note(f"GPU delegate unavailable, using CPU ({probe.fallback_from})")
+    note(f"compute device: {device}")
+
+    workers = cfg.workers or _default_workers(cfg.backend, resolved_delegate)
     note(f"detecting {len(pending):,} images with {workers} workers, backend={cfg.backend}")
 
     local = threading.local()
     backends: list = []
     backends_lock = threading.Lock()
+    # The probe is a perfectly good worker backend; hand it to whichever thread
+    # asks first instead of paying for the model load twice.
+    spare: list = [probe]
 
     def backend_for_thread():
         backend = getattr(local, "backend", None)
         if backend is None:
-            backend = make_backend(
-                cfg.backend,
-                max_side=cfg.max_side,
-                max_poses=cfg.max_poses,
-                mp_model=cfg.mp_model,
-            )
+            with backends_lock:
+                backend = spare.pop() if spare else None
+            if backend is None:
+                backend = new_backend()
             local.backend = backend
             with backends_lock:
                 backends.append(backend)
-                if len(backends) == 1:
-                    note(f"compute device: {backend.device}")
         return backend
 
     writer = _Writer(detections_path)
@@ -219,10 +249,9 @@ def run_detect(cfg: DetectConfig) -> dict:
     finally:
         progress.done()
         writer.close()
-        for backend in backends:
+        for backend in backends + spare:
             backend.close()
 
-    device = backends[0].device if backends else "unknown"
     note(
         f"detected: {counters['ok']:,} images with figures "
         f"({counters['poses']:,} poses), {counters['empty']:,} with none, "
@@ -243,6 +272,11 @@ def _write_detect_meta(cfg: DetectConfig, root: str, scanned: int, backend: str,
         "excluded": list(cfg.exclude),
         "detections_file": DETECTIONS_FILE,
     }
+    if backend == "mediapipe":
+        # Recorded so `build` can stamp it into index.json: an index built with
+        # `heavy` and queried with `lite` is a subtly different vector space,
+        # and that is worth being able to see after the fact.
+        meta["model_size"] = cfg.model_size
     path = os.path.join(cfg.out_dir, DETECT_META_FILE)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)

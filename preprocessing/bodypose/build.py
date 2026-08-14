@@ -222,6 +222,7 @@ def run_build(cfg: BuildConfig) -> dict:
         "detector": {
             "backend": detect_meta.get("backend", "unknown"),
             "compute_device": detect_meta.get("compute_device", "unknown"),
+            "model_size": detect_meta.get("model_size"),
             "max_side": detect_meta.get("max_side"),
         },
         "filters": asdict(f),

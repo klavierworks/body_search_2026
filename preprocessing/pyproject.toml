@@ -1,21 +1,32 @@
 [project]
 name = "bodypose"
 version = "1.0.0"
-description = "Pose-vector indexing for a body-based image search engine, on Apple Neural Engine"
+description = "Pose-vector indexing for a body-based image search engine"
+# MediaPipe does not publish a wheel for every Python version. 3.11 to 3.13 are
+# known to work; 3.10 is the floor the code itself needs.
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
-    # Vision does the pose detection; Quartz/ImageIO does the decoding and the
-    # thumbnail encoding. Both are thin bindings over frameworks already on the
-    # machine, so there is no model to download for the default backend.
-    "pyobjc-framework-Vision>=10.0",
-    "pyobjc-framework-Quartz>=10.0",
+    # MediaPipe is the detector at both ends of this project — here and in the
+    # browser — which is what keeps the two vector spaces identical and what
+    # makes this run anywhere. Pillow decodes; its JPEG draft() path is what
+    # stops a 40-megapixel scan being decoded in full for a 1024px detection.
+    "mediapipe>=0.10.14",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
-# Only needed for `--backend mediapipe` and for `bodypose doctor`. MediaPipe's
-# wheels lag the newest Python releases; 3.11 or 3.12 is the safe choice.
-mediapipe = ["mediapipe>=0.10.14", "pillow>=10.0"]
+# Apple Vision on the Neural Engine: faster than MediaPipe on Apple silicon,
+# but a second detector, so only worth it if `bodypose doctor` says the two
+# agree. The markers keep pip from even trying these off macOS, where the
+# pyobjc build calls /usr/bin/sw_vers and dies.
+vision = [
+    "pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+]
+# HEIC/HEIF decoding. macOS handled these natively through ImageIO; Pillow
+# needs the plugin, and without it those files land in the error column.
+heif = ["pillow-heif>=0.13"]
 
 [project.scripts]
 bodypose = "bodypose.cli:main"

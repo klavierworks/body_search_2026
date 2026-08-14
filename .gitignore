@@ -20,6 +20,9 @@ INPUT/*
 OUTPUT/*
 !OUTPUT/README.md
 
+# Pose models, downloaded on first use. Reproducible, and `heavy` is 29 MB.
+.models/
+
 # live
 node_modules/
 dist/
