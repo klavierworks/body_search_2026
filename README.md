@@ -35,32 +35,6 @@ sides run a pose detector and compare the *configuration of the limbs*:
 3. **Live** — webcam → MediaPipe → *the same normalisation* → nearest
    neighbour → show the image.
 
-## Several people at once
-
-Up to four figures are detected per frame, and each gets their own search, their
-own image and their own skeleton, in a colour of their own so two bodies
-crossing stay legible as two bodies.
-
-MediaPipe hands back an unordered array of poses with no identity attached —
-whoever was first in the list last frame can be second in this one, and anyone
-missed for a frame comes back as a new entry. That matters because the state
-that makes the display watchable is per person: the smoother averages a query
-vector over time, and the hold keeps an image on screen for a minimum dwell.
-Feed one person's pose into another's smoother and their pictures swap over. So
-[`tracking.ts`](live/src/tracking.ts) associates each detection with the nearest
-track from the previous frame, measured in units of the figure's own size, and
-lets a track coast on its last pose for 350 ms before retiring it and its state.
-
-One further rule, in [`main.ts`](live/src/main.ts): an image goes to at most one
-person per frame. Two people in the same pose genuinely do have the same nearest
-neighbour, and showing them the same photograph twice reads as a bug rather than
-as the coincidence it is, so whoever is already wearing it keeps it and the
-others fall through to their next-best match.
-
-Detection cost is roughly linear in the number of figures, since BlazePose runs
-its landmark model once per body. Search is not the constraint — four queries a
-frame against 43k poses is still a fraction of a millisecond.
-
 Everything rests on step 2 producing the same vector on both sides. It is
 implemented twice, in [`encoding.py`](preprocessing/bodypose/encoding.py) and
 [`encoding.ts`](live/src/encoding.ts), and a golden-fixture test generated from
@@ -95,6 +69,37 @@ bodypose doctor output-images -n 60
 It runs both over the same sample and reports how closely their vectors agree,
 including whether mirroring one *improves* agreement — which is how a left/right
 convention mismatch would show up, invisibly to any single-detector test.
+
+### Several people at once
+
+Up to four figures are detected per frame, and each gets their own search, their
+own image and their own skeleton, tinted a colour of its own so two bodies
+crossing stay legible as two bodies. The corpus side already indexed several
+figures per image; this is the live side catching up.
+
+MediaPipe hands back an unordered array of poses with no identity attached —
+whoever was first in the list last frame can be second in this one, and anyone
+missed for a frame comes back as a new entry. That matters because the state
+that makes the display watchable is per person: the smoother averages a query
+vector over time, and the hold keeps an image on screen for a minimum dwell.
+Feed one person's pose into another's smoother and their pictures swap over. So
+[`tracking.ts`](live/src/tracking.ts) associates each detection with the nearest
+track from the previous frame, measured in units of the figure's own size so
+that someone close to the camera is allowed to move further per frame than
+someone at the back of the room, and lets a track coast on its last pose for
+350 ms before retiring it and its state.
+
+One further rule, in [`main.ts`](live/src/main.ts): an image goes to at most one
+person per frame. Two people in the same pose genuinely do have the same nearest
+neighbour, and showing them the same photograph twice reads as a bug rather than
+as the coincidence it is, so whoever is already wearing it keeps it and the
+others fall through to their next-best match.
+
+Detection cost is roughly linear in the number of figures, since BlazePose runs
+its landmark model once per body — four is about as far as the lite model goes
+on an integrated GPU at 30fps, and `MAX_PEOPLE` in `main.ts` is the dial. Search
+is not the constraint: four queries a frame against 43k poses is still a
+fraction of a millisecond.
 
 ## Quick start
 

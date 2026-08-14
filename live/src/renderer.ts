@@ -12,8 +12,14 @@
  * a picture of a body in the same configuration; the box is what lets that body
  * be laid over yours at the right size and place rather than just displayed.
  *
- * Previous matches fade out behind the current one, so a moving body leaves a
- * short trail of the images it passed through.
+ * The current image follows you: its registration is recomputed every frame
+ * from where your skeleton is now, so it stays on your body as you move around
+ * the frame or towards the camera, until a better match replaces it.
+ *
+ * Superseded images do *not* follow. They freeze wherever the body was when
+ * they were replaced and fade from there, so a moving body leaves a short trail
+ * of the images it passed through. A trail that kept tracking you would pile up
+ * in one place and smear rather than layer.
  *
  * All of that is per person. Each tracked body owns its own stack of layers and
  * its own trail, so two people standing side by side get two independent
@@ -38,7 +44,10 @@ interface Layer {
   trackId: number
   match: Match
   image: HTMLImageElement
-  /** Where the live skeleton was when this match arrived — the image stays put. */
+  /**
+   * Where the image is drawn. Chased towards the live figure every frame while
+   * this is the current match, then frozen at its last value once it is not.
+   */
   box: Box
   addedAt: number
   /** When the image stopped being current, or null while it still is. */
@@ -52,6 +61,11 @@ export interface RendererOptions {
   trail?: number
   /** Confidence below which a joint is not drawn. */
   confFloor?: number
+  /**
+   * Time constant for the image following the body, in ms. Roughly how long it
+   * takes to close two thirds of a gap. 0 pins the image to the raw box.
+   */
+  followMs?: number
 }
 
 /**
@@ -75,6 +89,8 @@ export class Renderer {
   private readonly fadeMs: number
   private readonly trail: number
   private readonly confFloor: number
+  private readonly followMs: number
+  private lastDrawAt = 0
 
   /** Camera aspect ratio, for mapping normalised pose coords to the canvas. */
   private aspect = 16 / 9
@@ -89,6 +105,7 @@ export class Renderer {
     this.fadeMs = options.fadeMs ?? 900
     this.trail = options.trail ?? 3
     this.confFloor = options.confFloor ?? 0.1
+    this.followMs = options.followMs ?? 70
   }
 
   setCameraAspect(width: number, height: number): void {
@@ -109,10 +126,10 @@ export class Renderer {
   }
 
   /**
-   * Show a new match for one person, pinned to wherever that figure is now.
+   * Show a new match for one person, registered on that figure as it is now.
    *
-   * The image keeps that position as it fades, rather than following the body —
-   * a trail that tracked you would smear instead of layering.
+   * From here `follow` keeps it on them until the next match arrives, at which
+   * point it freezes where it stands and fades.
    */
   push(trackId: number, match: Match, url: string, kp: Keypoints): void {
     const image = this.imageFor(match.path, url)
@@ -138,6 +155,8 @@ export class Renderer {
     const { ctx, canvas } = this
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+    this.follow(people, now)
+
     const present = new Set(people.map((person) => person.id))
     // Oldest first, so each current match lands on top of its own trail.
     for (let i = this.layers.length - 1; i >= 0; i--) {
@@ -153,6 +172,37 @@ export class Renderer {
 
     if (this.showSkeleton) {
       for (const person of people) this.drawSkeleton(person.kp, personColor(person.id))
+    }
+  }
+
+  /**
+   * Re-register each person's current image on where their body is now.
+   *
+   * Chased rather than snapped, because the box comes straight from the
+   * detector and a joint crossing the confidence floor — an ankle appearing as
+   * you step forward — moves it in one step. Snapping to that makes the
+   * photograph jump; easing turns it into a glide. The time constant is short
+   * enough that the image is never visibly behind the skeleton.
+   *
+   * Framerate-independent: the fraction closed per frame is derived from the
+   * elapsed time, so this behaves the same at 30fps and at 120.
+   */
+  private follow(people: readonly Person[], now: number): void {
+    const dt = this.lastDrawAt ? Math.min(now - this.lastDrawAt, 100) : 0
+    this.lastDrawAt = now
+    if (dt <= 0) return
+    const k = this.followMs > 0 ? 1 - Math.exp(-dt / this.followMs) : 1
+
+    for (const person of people) {
+      const layer = this.layers.find((l) => l.trackId === person.id)
+      if (!layer || layer.fadeFrom !== null) continue
+      const target = this.liveBox(person.kp)
+      if (!target) continue
+      const { box } = layer
+      box.x += (target.x - box.x) * k
+      box.y += (target.y - box.y) * k
+      box.width += (target.width - box.width) * k
+      box.height += (target.height - box.height) * k
     }
   }
 
