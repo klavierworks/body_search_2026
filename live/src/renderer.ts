@@ -14,10 +14,16 @@
  *
  * Previous matches fade out behind the current one, so a moving body leaves a
  * short trail of the images it passed through.
+ *
+ * All of that is per person. Each tracked body owns its own stack of layers and
+ * its own trail, so two people standing side by side get two independent
+ * pictures registered onto them, and one person leaving the frame fades out
+ * only their own images.
  */
 
 import { NUM_JOINTS, SKELETON, type Keypoints } from './encoding'
 import type { Match } from './searchIndex'
+import type { Person } from './tracking'
 
 /** A figure's extent on screen, in device pixels. */
 interface Box {
@@ -28,20 +34,37 @@ interface Box {
 }
 
 interface Layer {
+  /** The person this image was matched for. */
+  trackId: number
   match: Match
   image: HTMLImageElement
   /** Where the live skeleton was when this match arrived — the image stays put. */
   box: Box
   addedAt: number
+  /** When the image stopped being current, or null while it still is. */
+  fadeFrom: number | null
 }
 
 export interface RendererOptions {
   /** How long a superseded image takes to fade out, in ms. */
   fadeMs?: number
-  /** How many superseded images stay on screen. */
+  /** How many superseded images stay on screen, per person. */
   trail?: number
   /** Confidence below which a joint is not drawn. */
   confFloor?: number
+}
+
+/**
+ * A colour per person, so two bodies crossing stay legible as two bodies.
+ *
+ * Golden-angle hue steps give well-separated colours for any number of people
+ * without a fixed palette to run out of. Kept pale and barely saturated: enough
+ * to tell two skeletons apart, not so much that the overlay stops reading as
+ * the white line it was.
+ */
+export function personColor(trackId: number, alpha = 0.92): string {
+  const hue = (trackId * 137.508) % 360
+  return `hsl(${hue.toFixed(1)} 45% 88% / ${alpha})`
 }
 
 export class Renderer {
@@ -86,37 +109,60 @@ export class Renderer {
   }
 
   /**
-   * Show a new match, pinned to wherever the live figure is right now.
+   * Show a new match for one person, pinned to wherever that figure is now.
    *
    * The image keeps that position as it fades, rather than following the body —
    * a trail that tracked you would smear instead of layering.
    */
-  push(match: Match, url: string, kp: Keypoints): void {
+  push(trackId: number, match: Match, url: string, kp: Keypoints): void {
     const image = this.imageFor(match.path, url)
     const box = this.liveBox(kp)
     if (!box) return
-    this.layers.unshift({ match, image, box, addedAt: performance.now() })
-    this.layers.length = Math.min(this.layers.length, this.trail + 1)
+
+    const now = performance.now()
+    // Whatever this person was showing starts fading from now, not from
+    // whenever it arrived — an image that held for ten seconds should still
+    // take the full fade to go.
+    const previous = this.layers.find((layer) => layer.trackId === trackId)
+    if (previous && previous.fadeFrom === null) previous.fadeFrom = now
+
+    this.layers.unshift({ trackId, match, image, box, addedAt: now, fadeFrom: null })
+    this.trimTrail(trackId)
   }
 
-  draw(kp: Keypoints | null, now: number): void {
+  /**
+   * @param people everyone currently tracked; anyone absent from this list has
+   *               left, and their images begin to fade.
+   */
+  draw(people: readonly Person[], now: number): void {
     const { ctx, canvas } = this
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Oldest first, so the current match lands on top of its own trail.
+    const present = new Set(people.map((person) => person.id))
+    // Oldest first, so each current match lands on top of its own trail.
     for (let i = this.layers.length - 1; i >= 0; i--) {
       const layer = this.layers[i]
-      const age = now - layer.addedAt
-      // The newest layer never fades; it is the current match.
-      const alpha = i === 0 ? 1 : Math.max(0, 1 - age / this.fadeMs)
+      if (layer.fadeFrom === null && !present.has(layer.trackId)) layer.fadeFrom = now
+      const alpha = layer.fadeFrom === null ? 1 : Math.max(0, 1 - (now - layer.fadeFrom) / this.fadeMs)
       if (alpha <= 0) continue
       this.drawLayer(layer, alpha)
     }
     this.layers = this.layers.filter(
-      (layer, i) => i === 0 || now - layer.addedAt < this.fadeMs,
+      (layer) => layer.fadeFrom === null || now - layer.fadeFrom < this.fadeMs,
     )
 
-    if (this.showSkeleton && kp) this.drawSkeleton(kp)
+    if (this.showSkeleton) {
+      for (const person of people) this.drawSkeleton(person.kp, personColor(person.id))
+    }
+  }
+
+  /** Keep at most `trail + 1` images per person; the rest are already invisible. */
+  private trimTrail(trackId: number): void {
+    let kept = 0
+    this.layers = this.layers.filter((layer) => {
+      if (layer.trackId !== trackId) return true
+      return ++kept <= this.trail + 1
+    })
   }
 
   private drawLayer(layer: Layer, alpha: number): void {
@@ -149,14 +195,14 @@ export class Renderer {
     ctx.restore()
   }
 
-  private drawSkeleton(kp: Keypoints): void {
+  private drawSkeleton(kp: Keypoints, color: string): void {
     const { ctx, canvas } = this
     const scale = canvas.width / 1280
 
     ctx.save()
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)'
+    ctx.strokeStyle = color
     ctx.lineWidth = Math.max(1.5, 3 * scale)
     // A dark halo keeps the white readable over a pale engraving as well as
     // over black.

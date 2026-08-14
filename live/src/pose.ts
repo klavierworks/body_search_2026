@@ -23,6 +23,12 @@ export interface PoseSourceOptions {
   delegate?: 'GPU' | 'CPU'
   width?: number
   height?: number
+  /**
+   * Most poses to return per frame. BlazePose runs its landmark model once per
+   * detected figure, so this is close to a linear cost multiplier — 4 is about
+   * as far as the lite model goes on an integrated GPU at 30fps.
+   */
+  maxPoses?: number
 }
 
 export class PoseSource {
@@ -36,7 +42,7 @@ export class PoseSource {
   }
 
   async start(options: PoseSourceOptions = {}): Promise<void> {
-    const { model = 'lite', delegate = 'GPU', width = 1280, height = 720 } = options
+    const { model = 'lite', delegate = 'GPU', width = 1280, height = 720, maxPoses = 4 } = options
 
     this.stream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: width }, height: { ideal: height }, facingMode: 'user' },
@@ -56,7 +62,7 @@ export class PoseSource {
         delegate,
       },
       runningMode: 'VIDEO',
-      numPoses: 1,
+      numPoses: maxPoses,
       minPoseDetectionConfidence: 0.5,
       minPosePresenceConfidence: 0.5,
       minTrackingConfidence: 0.5,
@@ -105,4 +111,19 @@ export function toKeypoints(result: PoseLandmarkerResult, poseIndex = 0): Keypoi
     kp[j * 3 + 2] = lm.visibility ?? 1
   }
   return kp
+}
+
+/**
+ * The same gather for every pose in the frame.
+ *
+ * The order is MediaPipe's and means nothing across frames — `PersonTracker`
+ * is what turns these into people with identities.
+ */
+export function toKeypointsAll(result: PoseLandmarkerResult): Keypoints[] {
+  const out: Keypoints[] = []
+  for (let i = 0; i < (result.landmarks?.length ?? 0); i++) {
+    const kp = toKeypoints(result, i)
+    if (kp) out.push(kp)
+  }
+  return out
 }
