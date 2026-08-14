@@ -187,7 +187,7 @@ function artifactServer(): Plugin {
 
 export default defineConfig({
   plugins: [artifactServer()],
-  server: { host: '127.0.0.1', port: 5173, open: false },
-  preview: { host: '127.0.0.1', port: 4173 },
+  server: { host: '0.0.0.0', port: 5173 },
+  preview: { host: '0.0.0.0', port: 4173 },
   optimizeDeps: { exclude: ['@mediapipe/tasks-vision'] },
 })
