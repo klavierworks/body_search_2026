@@ -96,10 +96,18 @@ def _last_meaningful_line(stderr: str) -> str:
         and not line.lstrip().startswith("@")
         and not line.startswith(("I0", "W0"))
     ]
+    # GL and EGL failures rarely use the word "error" — they say things like
+    # "Unable to initialize EGL" or "cannot open shared object file" — so match
+    # the vocabulary these actually fail in.
+    markers = (
+        "check failed", "error", "fail", "unable", "cannot", "not supported",
+        "no such", "undefined symbol", "egl", "gl_context",
+    )
     for line in reversed(interesting):
-        if "Check failed" in line or "Error" in line or "error" in line:
-            return line[:200]
-    return interesting[-1][:200] if interesting else ""
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            return line[:300]
+    return interesting[-1][:300] if interesting else ""
 
 
 def main() -> int:

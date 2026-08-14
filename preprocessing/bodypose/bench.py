@@ -118,7 +118,12 @@ def run_bench(cfg: BenchConfig) -> dict:
             try:
                 rate, _found, device = _time_one(cfg, delegate, workers, paths)
             except SystemExit as exc:
-                note(f"  {delegate:<10} {'—':>7}  unavailable: {str(exc).splitlines()[0][:60]}")
+                # Why a delegate is unavailable is the whole value of this row,
+                # so print the reason in full rather than truncating it into
+                # uselessness.
+                note(f"  {delegate:<10} {'—':>7}  unavailable")
+                for line in str(exc).splitlines():
+                    note(f"      {line.strip()}")
                 break
             except Exception as exc:  # noqa: BLE001 - a dead delegate is a result
                 note(f"  {delegate:<10} {'—':>7}  failed: {type(exc).__name__}: {exc}")
