@@ -1,0 +1,178 @@
+:root {
+  --bg: #000;
+  --fg: #f2f2f0;
+  --dim: #8a8a86;
+  --accent: #78ffc8;
+  --gap: 14px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+}
+
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* The compositor: photographs registered onto the live skeleton, and the
+   skeleton drawn over the top. Everything else is diagnostics. */
+#scene {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* The camera feed is only ever a debugging aid — the pose is what matters, not
+   the picture of you. Hidden rather than removed, since MediaPipe reads frames
+   from this element and a display:none video stops producing them. */
+#video {
+  position: absolute;
+  right: var(--gap);
+  bottom: var(--gap);
+  width: min(18vw, 260px);
+  border-radius: 3px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+#stage.show-camera #video {
+  opacity: 0.55;
+}
+
+#stage.mirror #video {
+  transform: scaleX(-1);
+}
+
+/* ---- hud ------------------------------------------------------------ */
+
+#hud {
+  position: absolute;
+  left: var(--gap);
+  top: var(--gap);
+  min-width: 210px;
+  padding: 10px 12px;
+  background: rgb(10 10 11 / 0.6);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgb(255 255 255 / 0.07);
+  border-radius: 3px;
+  transition: opacity 200ms ease;
+}
+
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hud-row span {
+  color: var(--dim);
+}
+
+.hud-row b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-path {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(255 255 255 / 0.07);
+}
+
+.hud-path b {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+}
+
+#keys {
+  position: absolute;
+  left: var(--gap);
+  bottom: var(--gap);
+  color: var(--dim);
+  transition: opacity 200ms ease;
+}
+
+kbd {
+  color: var(--fg);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 2px;
+  padding: 0 4px;
+}
+
+#stage.no-hud #hud,
+#stage.no-hud #keys {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---- boot ----------------------------------------------------------- */
+
+#boot {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 18px;
+  background: var(--bg);
+  text-align: center;
+  padding: 24px;
+  z-index: 10;
+}
+
+#boot[hidden] {
+  display: none;
+}
+
+#boot h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.7em;
+  text-indent: 0.7em;
+}
+
+#boot-status {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--dim);
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+#boot-status.error {
+  color: #ff8f6b;
+}
+
+#boot-start {
+  font: inherit;
+  color: var(--bg);
+  background: var(--accent);
+  border: 0;
+  border-radius: 2px;
+  padding: 9px 20px;
+  cursor: pointer;
+}
+
+#boot-start[hidden] {
+  display: none;
+}

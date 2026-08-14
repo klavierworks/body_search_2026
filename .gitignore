@@ -1,0 +1,20 @@
+# preprocessing
+.venv/
+__pycache__/
+*.egg-info/
+
+# Index artefacts. Derived data, and large with it: out-sample/ is 5.1 GB, most
+# of it the thumbnails. All of it is reproducible from the images with
+# `bodypose run`, and none of it is reviewable in a diff.
+#
+# Unanchored on purpose — `--out` defaults to `out` relative to wherever the CLI
+# was run, so these directories do not always land under preprocessing/.
+out/
+out-*/
+
+# live
+node_modules/
+dist/
+live/public/mediapipe/
+
+.DS_Store

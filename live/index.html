@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>BODY — live pose search</title>
+  </head>
+  <body>
+    <main id="stage">
+      <canvas id="scene"></canvas>
+
+      <video id="video" playsinline muted></video>
+
+      <div id="boot">
+        <h1>BODY</h1>
+        <p id="boot-status">loading index…</p>
+        <button id="boot-start" hidden>start camera</button>
+      </div>
+
+      <div id="hud">
+        <div class="hud-row"><span>corpus</span><b id="hud-corpus">—</b></div>
+        <div class="hud-row"><span>cosine</span><b id="hud-cosine">—</b></div>
+        <div class="hud-row"><span>distance</span><b id="hud-distance">—</b></div>
+        <div class="hud-row"><span>search</span><b id="hud-search">—</b></div>
+        <div class="hud-row"><span>fps</span><b id="hud-fps">—</b></div>
+        <div class="hud-row hud-path"><span>file</span><b id="hud-path">—</b></div>
+      </div>
+
+      <div id="keys">
+        <kbd>M</kbd> mirror · <kbd>S</kbd> skeleton · <kbd>V</kbd> camera · <kbd>H</kbd> hud
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
